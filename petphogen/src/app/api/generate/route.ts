@@ -1,0 +1,75 @@
+import { NextRequest, NextResponse } from "next/server";
+import Replicate from "replicate";
+import { getModelConfig, buildImageInput, DEFAULT_MODEL } from "@/lib/models";
+
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN,
+});
+
+async function runWithRetry(
+  prompt: string,
+  dataUrl: string,
+  aspectRatio: string,
+  modelId: string,
+  retries = 2
+): Promise<unknown> {
+  const config = getModelConfig(modelId);
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await replicate.run(modelId as `${string}/${string}`, {
+        input: {
+          prompt,
+          aspect_ratio: aspectRatio,
+          output_format: "jpg",
+          ...buildImageInput(config, dataUrl),
+        },
+      });
+    } catch (err: unknown) {
+      const isRateLimit =
+        err instanceof Error && err.message.includes("429");
+      if (isRateLimit && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 12000));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const formData = await req.formData();
+  const file = formData.get("photo");
+  const prompt = formData.get("prompt");
+  const aspectRatio = (formData.get("aspectRatio") as string) || "1:1";
+  const numOutputs = parseInt((formData.get("numOutputs") as string) || "1");
+  const modelId = (formData.get("model") as string) || DEFAULT_MODEL;
+
+  if (!file || !(file instanceof Blob)) {
+    return NextResponse.json({ error: "No photo provided" }, { status: 400 });
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const base64 = buffer.toString("base64");
+  const mimeType = file.type || "image/jpeg";
+  const dataUrl = `data:${mimeType};base64,${base64}`;
+
+  const promptText = prompt
+    ? `Disney Pixar 3D animated style, ${String(prompt).trim()}, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality`
+    : "Transform into Disney Pixar 3D animated style, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality";
+
+  try {
+    const runs = Array.from({ length: Math.min(numOutputs, 4) }, () =>
+      runWithRetry(promptText, dataUrl, aspectRatio, modelId)
+    );
+    const outputs = await Promise.all(runs);
+    const images = outputs.map(String);
+
+    return NextResponse.json({ images });
+  } catch (err) {
+    console.error("Replicate error:", err);
+    const message =
+      err instanceof Error ? err.message : "Image generation failed.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
