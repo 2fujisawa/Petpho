@@ -1,7 +1,8 @@
 export type ModelId =
   | "black-forest-labs/flux-kontext-pro"
-  | "black-forest-labs/flux-kontext-max"
-  | "black-forest-labs/flux-kontext-dev"
+  | "black-forest-labs/flux-fill-pro"
+  | "stability-ai/stable-diffusion-3.5-large"
+  | "ideogram-ai/ideogram-v2-turbo"
   | "google/nano-banana"
   | "qwen/qwen-image-edit-plus"
   | "bytedance/seedream-4";
@@ -25,19 +26,19 @@ export const MODELS: ModelConfig[] = [
     imageIsArray: false,
   },
   {
-    id: "black-forest-labs/flux-kontext-max",
-    name: "Flux Kontext Max",
-    provider: "Black Forest Labs",
-    description: "Highest quality output — slower but premium results",
-    imageParam: "input_image",
+    id: "stability-ai/stable-diffusion-3.5-large",
+    name: "Stable Diffusion 3.5",
+    provider: "Stability AI",
+    description: "Rich textures & detail — great for lifelike Pixar renders",
+    imageParam: "image",
     imageIsArray: false,
   },
   {
-    id: "black-forest-labs/flux-kontext-dev",
-    name: "Flux Kontext Dev",
-    provider: "Black Forest Labs",
-    description: "Fast & affordable — great for rapid iteration",
-    imageParam: "input_image",
+    id: "ideogram-ai/ideogram-v2-turbo",
+    name: "Ideogram v2 Turbo",
+    provider: "Ideogram",
+    description: "Fast & illustrated — strong Pixar character style",
+    imageParam: "image",
     imageIsArray: false,
   },
   {

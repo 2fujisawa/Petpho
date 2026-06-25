@@ -48,19 +48,29 @@ export async function POST(req: NextRequest) {
   if (!file || !(file instanceof Blob)) {
     return NextResponse.json({ error: "No photo provided" }, { status: 400 });
   }
+  if (file.size > 8 * 1024 * 1024) {
+    return NextResponse.json({ error: "Photo must be under 8 MB" }, { status: 400 });
+  }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const base64 = buffer.toString("base64");
   const mimeType = file.type || "image/jpeg";
-  const dataUrl = `data:${mimeType};base64,${base64}`;
+  const buffer = Buffer.from(await file.arrayBuffer());
 
   const promptText = prompt
     ? `Disney Pixar 3D animated style, ${String(prompt).trim()}, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality`
     : "Transform into Disney Pixar 3D animated style, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality";
 
+  let uploadedFile: Awaited<ReturnType<typeof replicate.files.create>> | null = null;
+
   try {
+    // Upload the image once to Replicate file storage so all concurrent runs
+    // share a small URL string instead of each embedding the full base64 payload.
+    uploadedFile = await replicate.files.create(
+      new Blob([buffer], { type: mimeType })
+    );
+    const imageUrl = uploadedFile.urls.get;
+
     const runs = Array.from({ length: Math.min(numOutputs, 4) }, () =>
-      runWithRetry(promptText, dataUrl, aspectRatio, modelId)
+      runWithRetry(promptText, imageUrl, aspectRatio, modelId)
     );
     const outputs = await Promise.all(runs);
     const images = outputs.map(String);
@@ -71,5 +81,9 @@ export async function POST(req: NextRequest) {
     const message =
       err instanceof Error ? err.message : "Image generation failed.";
     return NextResponse.json({ error: message }, { status: 500 });
+  } finally {
+    if (uploadedFile) {
+      replicate.files.delete(uploadedFile.id).catch(() => {});
+    }
   }
 }
