@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -46,11 +46,52 @@ export default function LoginPage() {
   }
 
   return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">
+          Password
+        </label>
+        <input
+          ref={inputRef}
+          type="password"
+          value={password}
+          onChange={(e) => { setPassword(e.target.value); setError(""); }}
+          placeholder="Enter access password"
+          className={`w-full px-4 py-3 rounded-xl border text-sm transition-all outline-none ${
+            error
+              ? "border-red-300 bg-red-50 focus:ring-2 focus:ring-red-100"
+              : "border-gray-200 focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+          }`}
+          autoComplete="current-password"
+        />
+        {error && (
+          <p className="text-xs text-red-500 font-medium animate-fade-in">{error}</p>
+        )}
+      </div>
+
+      <button
+        type="submit"
+        disabled={loading || !password.trim()}
+        className="w-full py-3 rounded-xl font-bold text-sm text-white bg-orange-400 hover:bg-orange-500 active:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm flex items-center justify-center gap-2 mt-1"
+      >
+        {loading ? (
+          <>
+            <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+            Signing in...
+          </>
+        ) : (
+          "Sign in →"
+        )}
+      </button>
+    </form>
+  );
+}
+
+export default function LoginPage() {
+  return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
       <div className="w-full max-w-sm animate-scale-in">
-        {/* Card */}
         <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-8">
-          {/* Logo */}
           <div className="flex flex-col items-center gap-3 mb-8">
             <div className="w-14 h-14 rounded-2xl bg-orange-400 flex items-center justify-center text-2xl shadow-md">
               🐶
@@ -62,47 +103,10 @@ export default function LoginPage() {
               <p className="text-sm text-gray-500 mt-1">Admin access required</p>
             </div>
           </div>
-
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">
-                Password
-              </label>
-              <input
-                ref={inputRef}
-                type="password"
-                value={password}
-                onChange={(e) => { setPassword(e.target.value); setError(""); }}
-                placeholder="Enter access password"
-                className={`w-full px-4 py-3 rounded-xl border text-sm transition-all outline-none ${
-                  error
-                    ? "border-red-300 bg-red-50 focus:ring-2 focus:ring-red-100"
-                    : "border-gray-200 focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
-                }`}
-                autoComplete="current-password"
-              />
-              {error && (
-                <p className="text-xs text-red-500 font-medium animate-fade-in">{error}</p>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading || !password.trim()}
-              className="w-full py-3 rounded-xl font-bold text-sm text-white bg-orange-400 hover:bg-orange-500 active:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm flex items-center justify-center gap-2 mt-1"
-            >
-              {loading ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  Signing in...
-                </>
-              ) : (
-                "Sign in →"
-              )}
-            </button>
-          </form>
+          <Suspense fallback={<div className="h-24" />}>
+            <LoginForm />
+          </Suspense>
         </div>
-
         <p className="text-center text-xs text-gray-400 mt-4">
           Petpho Gen · Admin Tool
         </p>
