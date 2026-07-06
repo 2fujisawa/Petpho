@@ -18,6 +18,7 @@ type GeneratedImage = {
   prompt: string;
   model: ModelId;
   sourceUrl?: string;
+  createdAt?: number;
 };
 
 type EditorState = {
@@ -224,6 +225,9 @@ export default function Home() {
   const [composeTarget, setComposeTarget] = useState<GeneratedImage | null>(null);
   const [composeLoading, setComposeLoading] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"generate" | "history">("generate");
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyFilter, setHistoryFilter] = useState<ModelId | null>(null);
   const [prompt, setPrompt] = useState("");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [numOutputs, setNumOutputs] = useState(1);
@@ -378,10 +382,12 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
 
+      const now = Date.now();
       const newImages: GeneratedImage[] = (data.images as string[]).map((url) => ({
         url,
         prompt: prompt || "Pixar style",
         model,
+        createdAt: now,
       }));
       setHistory((prev) => [...newImages, ...prev]);
     } catch (err) {
@@ -847,30 +853,244 @@ export default function Home() {
   // =========================================================
   // MAIN GALLERY VIEW
   // =========================================================
-  return (
-    <main className="min-h-screen flex flex-col">
-      <div className="bg-orange-400 text-white text-center text-sm font-medium py-2 tracking-wide">
-        🐾 Admin Tool — Petpho Pixar Image Generator
-      </div>
+  const MODEL_BADGE: Record<string, string> = {
+    "black-forest-labs/flux-kontext-pro": "bg-violet-100 text-violet-700",
+    "stability-ai/stable-diffusion-3.5-large": "bg-blue-100 text-blue-700",
+    "ideogram-ai/ideogram-v2-turbo": "bg-emerald-100 text-emerald-700",
+    "google/nano-banana": "bg-amber-100 text-amber-700",
+    "qwen/qwen-image-edit-plus": "bg-indigo-100 text-indigo-700",
+    "bytedance/seedream-4": "bg-pink-100 text-pink-700",
+  };
 
-      <header className="bg-white border-b border-orange-100 px-6 py-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-orange-400 flex items-center justify-center text-white text-lg font-extrabold shadow-sm">
+  const filteredHistory = history.filter((img) => {
+    const matchSearch = !historySearch || img.prompt.toLowerCase().includes(historySearch.toLowerCase());
+    const matchFilter = !historyFilter || img.model === historyFilter;
+    return matchSearch && matchFilter;
+  });
+
+  function formatDate(ts?: number) {
+    if (!ts) return null;
+    const d = new Date(ts);
+    const now = new Date();
+    const diffH = (now.getTime() - d.getTime()) / 3600000;
+    if (diffH < 1) return "Just now";
+    if (diffH < 24) return `${Math.floor(diffH)}h ago`;
+    if (diffH < 48) return "Yesterday";
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+
+  return (
+    <main className="min-h-screen flex flex-col bg-gray-50">
+      <header className="bg-white border-b border-gray-100 px-6 flex items-center justify-between shadow-sm z-10">
+        {/* Logo */}
+        <div className="flex items-center gap-3 py-4">
+          <div className="w-9 h-9 rounded-xl bg-orange-400 flex items-center justify-center text-white font-extrabold shadow-sm">
             🐶
           </div>
-          <div>
-            <span className="font-extrabold text-xl tracking-tight text-gray-800">PETPHO</span>
-            <span className="ml-2 text-orange-400 font-semibold text-sm">Gen</span>
+          <div className="flex items-baseline gap-2">
+            <span className="font-extrabold text-lg tracking-tight text-gray-900">PETPHO</span>
+            <span className="text-orange-400 font-semibold text-sm">Gen</span>
+            <span className="text-xs text-orange-500 bg-orange-50 border border-orange-100 px-2 py-0.5 rounded-full font-medium">Admin</span>
           </div>
-          <span className="text-xs text-orange-500 bg-orange-50 border border-orange-200 px-2 py-0.5 rounded-full font-medium">
-            Admin
-          </span>
         </div>
+
+        {/* Tab nav */}
+        <nav className="flex h-full">
+          {(["generate", "history"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`relative px-6 py-5 text-sm font-semibold transition-colors flex items-center gap-2 ${
+                activeTab === tab ? "text-orange-500" : "text-gray-400 hover:text-gray-700"
+              }`}
+            >
+              {tab === "generate" ? "✨ Generate" : "🗂 History"}
+              {tab === "history" && history.length > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold transition-colors ${
+                  activeTab === "history" ? "bg-orange-100 text-orange-500" : "bg-gray-100 text-gray-500"
+                }`}>
+                  {history.length}
+                </span>
+              )}
+              {activeTab === tab && (
+                <span className="absolute bottom-0 left-3 right-3 h-0.5 bg-orange-400 rounded-t-full" />
+              )}
+            </button>
+          ))}
+        </nav>
+
         <span className="text-sm text-gray-400 font-medium">Pixar Image Generator ✨</span>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-80 bg-white border-r border-orange-100 flex flex-col gap-5 p-6 overflow-y-auto shadow-sm">
+        {/* ── HISTORY TAB ─────────────────────────────────── */}
+        {activeTab === "history" && (
+          <section className="flex-1 overflow-y-auto p-8 animate-fade-in">
+            {/* Top bar */}
+            <div className="flex items-start justify-between mb-6 gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">History</h2>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  {history.length} image{history.length !== 1 ? "s" : ""} generated
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+                  <input
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    placeholder="Search prompts..."
+                    className="pl-8 pr-4 py-2 text-sm bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-200 focus:border-orange-400 w-52 transition-all"
+                  />
+                </div>
+                {history.length > 0 && (
+                  <button
+                    onClick={() => { if (confirm("Clear all history?")) setHistory([]); }}
+                    className="text-xs text-red-400 hover:text-red-600 transition-colors font-medium px-3 py-2 rounded-lg hover:bg-red-50"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Model filter chips */}
+            {history.length > 0 && (
+              <div className="flex gap-2 mb-6 flex-wrap">
+                <button
+                  onClick={() => setHistoryFilter(null)}
+                  className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all ${
+                    historyFilter === null
+                      ? "bg-gray-900 text-white shadow-sm"
+                      : "bg-white border border-gray-200 text-gray-600 hover:border-gray-400"
+                  }`}
+                >
+                  All · {history.length}
+                </button>
+                {MODELS.map((m) => {
+                  const count = history.filter((img) => img.model === m.id).length;
+                  if (count === 0) return null;
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => setHistoryFilter(historyFilter === m.id ? null : m.id)}
+                      className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all ${
+                        historyFilter === m.id
+                          ? "bg-orange-400 text-white shadow-sm"
+                          : "bg-white border border-gray-200 text-gray-600 hover:border-orange-300 hover:text-orange-600"
+                      }`}
+                    >
+                      {m.name} · {count}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Grid */}
+            {filteredHistory.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-32 gap-4 text-gray-400">
+                <div className="text-6xl">🐾</div>
+                <p className="text-base font-semibold text-gray-600">
+                  {history.length === 0 ? "No images yet" : "No results found"}
+                </p>
+                <p className="text-sm text-gray-400">
+                  {history.length === 0 ? "Generate your first Pixar pet portrait" : "Try a different search or filter"}
+                </p>
+              </div>
+            ) : (
+              <div className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4">
+                {filteredHistory.map((img, i) => {
+                  const isBroken = brokenImages.has(img.url);
+                  const modelName = MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1];
+                  const badgeClass = MODEL_BADGE[img.model] ?? "bg-gray-100 text-gray-600";
+                  return (
+                    <div
+                      key={`hist-${img.url}-${i}`}
+                      className="break-inside-avoid animate-fade-up"
+                      style={{ animationDelay: `${Math.min(i * 30, 300)}ms` }}
+                    >
+                      <div
+                        className={`group relative rounded-2xl overflow-hidden bg-white shadow-sm transition-all duration-200 ${
+                          isBroken ? "cursor-default" : "hover:shadow-lg hover:-translate-y-0.5 cursor-pointer"
+                        }`}
+                        onClick={() => !isBroken && setLightbox(img.url)}
+                      >
+                        {isBroken ? (
+                          <div className="aspect-square flex flex-col items-center justify-center gap-2 p-4 bg-gray-50">
+                            <span className="text-3xl opacity-30">🖼️</span>
+                            <p className="text-xs text-gray-400 font-medium">Expired</p>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((x) => x.url !== img.url)); }}
+                              className="text-xs bg-red-100 hover:bg-red-200 text-red-500 px-3 py-1 rounded-lg transition-colors font-medium mt-1"
+                            >Remove</button>
+                          </div>
+                        ) : (
+                          <>
+                            <Image
+                              src={img.url}
+                              alt={img.prompt}
+                              width={512} height={512}
+                              className="w-full h-auto object-cover"
+                              unoptimized
+                              onError={() => setBrokenImages((prev) => new Set(prev).add(img.url))}
+                            />
+                            {/* Hover overlay */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-3 gap-2">
+                              <p className="text-xs text-white/90 line-clamp-2 font-medium leading-relaxed">{img.prompt}</p>
+                              <div className="flex gap-1.5 flex-wrap">
+                                <button onClick={(e) => { e.stopPropagation(); openEditor(img); }}
+                                  className="text-xs bg-orange-400 hover:bg-orange-500 text-white px-2.5 py-1 rounded-lg transition-colors font-semibold">
+                                  ✏️ Edit
+                                </button>
+                                <button onClick={(e) => { e.stopPropagation(); setComposeTarget(img); }}
+                                  className="text-xs bg-sky-500 hover:bg-sky-600 text-white px-2.5 py-1 rounded-lg transition-colors font-semibold">
+                                  🖼️ Scene
+                                </button>
+                                <a href={img.url} download onClick={(e) => e.stopPropagation()}
+                                  className="text-xs bg-white/20 hover:bg-white/30 text-white px-2.5 py-1 rounded-lg transition-colors">
+                                  ↓
+                                </a>
+                                <button onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((x) => x.url !== img.url)); }}
+                                  className="text-xs bg-red-500/70 hover:bg-red-500 text-white px-2.5 py-1 rounded-lg transition-colors">
+                                  🗑️
+                                </button>
+                              </div>
+                            </div>
+                            {/* Bottom meta bar */}
+                            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent p-2.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none" />
+                            {/* Badges always visible */}
+                            <div className="absolute top-2 left-2 right-2 flex justify-between items-start pointer-events-none">
+                              {img.sourceUrl && (
+                                <span className="text-xs bg-orange-400 text-white px-1.5 py-0.5 rounded-md font-semibold">Edited</span>
+                              )}
+                              <span className={`text-xs px-1.5 py-0.5 rounded-md font-semibold ml-auto ${badgeClass}`}>
+                                {modelName}
+                              </span>
+                            </div>
+                            {formatDate(img.createdAt) && (
+                              <div className="absolute bottom-2 right-2 pointer-events-none">
+                                <span className="text-xs bg-black/40 text-white/80 px-1.5 py-0.5 rounded-md font-medium">
+                                  {formatDate(img.createdAt)}
+                                </span>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ── GENERATE TAB ────────────────────────────────── */}
+        {activeTab === "generate" && (
+          <>
+        <aside className="w-80 bg-white border-r border-gray-100 flex flex-col gap-5 p-6 overflow-y-auto shadow-sm">
           {/* Photo upload */}
           <div className="flex flex-col gap-2">
             <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">
@@ -1021,106 +1241,80 @@ export default function Home() {
           )}
         </aside>
 
-        {/* Gallery */}
-        <section className="flex-1 overflow-y-auto p-6 bg-orange-50">
+        {/* Generate gallery */}
+        <section className="flex-1 overflow-y-auto p-6 bg-gray-50">
           {history.length === 0 && !loading ? (
             <div className="h-full flex flex-col items-center justify-center gap-4 text-gray-400">
               <div className="text-7xl">🐾</div>
-              <p className="text-base font-medium text-gray-500">Your Pixar pet portraits will appear here</p>
+              <p className="text-base font-semibold text-gray-600">Your Pixar pet portraits will appear here</p>
               <p className="text-sm text-gray-400">Upload a photo and hit Generate ✨</p>
             </div>
           ) : (
-            <div className="columns-2 md:columns-3 lg:columns-4 gap-3 space-y-3">
-              {loading &&
-                Array.from({ length: numOutputs }).map((_, i) => (
-                  <div
-                    key={`skeleton-${i}`}
-                    className="break-inside-avoid rounded-2xl bg-orange-100 border border-orange-200 animate-pulse"
-                    style={{ aspectRatio: aspectRatio.replace(":", "/") }}
-                  />
-                ))}
+            <div className="columns-2 md:columns-3 lg:columns-4 gap-4 space-y-4">
+              {loading && Array.from({ length: numOutputs }).map((_, i) => (
+                <div key={`sk-${i}`}
+                  className="break-inside-avoid rounded-2xl bg-white border border-gray-100 animate-pulse shadow-sm"
+                  style={{ aspectRatio: aspectRatio.replace(":", "/") }}
+                />
+              ))}
               {history.map((img, i) => {
                 const isBroken = brokenImages.has(img.url);
+                const modelName = MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1];
+                const badgeClass = MODEL_BADGE[img.model] ?? "bg-gray-100 text-gray-600";
                 return (
-                  <div
-                    key={`${img.url}-${i}`}
-                    className={`break-inside-avoid group relative rounded-2xl overflow-hidden border-2 transition-all shadow-sm ${
-                      isBroken
-                        ? "border-gray-200 cursor-default"
-                        : "border-transparent hover:border-orange-400 hover:shadow-md cursor-pointer"
-                    }`}
-                    onClick={() => !isBroken && setLightbox(img.url)}
+                  <div key={`gen-${img.url}-${i}`}
+                    className="break-inside-avoid animate-fade-up"
+                    style={{ animationDelay: `${Math.min(i * 40, 200)}ms` }}
                   >
-                    {isBroken ? (
-                      <div className="aspect-square bg-gray-100 flex flex-col items-center justify-center gap-2 p-4">
-                        <span className="text-3xl opacity-40">🖼️</span>
-                        <p className="text-xs text-gray-400 text-center font-medium">Expired</p>
-                        <p className="text-xs text-gray-400 text-center line-clamp-2 italic">{img.prompt}</p>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((_, idx) => idx !== i)); }}
-                          className="mt-1 text-xs bg-red-100 hover:bg-red-200 text-red-500 px-3 py-1 rounded-lg transition-colors font-medium"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        {img.sourceUrl && (
-                          <div className="absolute top-2 left-2 z-10 bg-orange-400 text-white text-xs px-2 py-0.5 rounded-full font-medium">
-                            Edited
-                          </div>
-                        )}
-                        <div className="absolute top-2 right-2 z-10 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
-                          {MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1]}
+                    <div
+                      className={`group relative rounded-2xl overflow-hidden bg-white shadow-sm transition-all duration-200 ${
+                        isBroken ? "cursor-default" : "hover:shadow-lg hover:-translate-y-0.5 cursor-pointer"
+                      }`}
+                      onClick={() => !isBroken && setLightbox(img.url)}
+                    >
+                      {isBroken ? (
+                        <div className="aspect-square flex flex-col items-center justify-center gap-2 p-4 bg-gray-50">
+                          <span className="text-3xl opacity-30">🖼️</span>
+                          <p className="text-xs text-gray-400 font-medium">Expired</p>
+                          <button onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((x) => x.url !== img.url)); }}
+                            className="text-xs bg-red-100 hover:bg-red-200 text-red-500 px-3 py-1 rounded-lg transition-colors font-medium mt-1">
+                            Remove
+                          </button>
                         </div>
-                        <Image
-                          src={img.url}
-                          alt={img.prompt}
-                          width={512}
-                          height={512}
-                          className="w-full h-auto object-cover"
-                          unoptimized
-                          onError={() => setBrokenImages((prev) => new Set(prev).add(img.url))}
-                        />
-                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 gap-2">
-                          <p className="text-xs text-white/90 line-clamp-2 font-medium">{img.prompt}</p>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); openEditor(img); }}
-                              className="text-xs bg-orange-400 hover:bg-orange-500 text-white px-2 py-1 rounded-lg transition-colors font-medium"
-                            >
-                              ✏️ Edit
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setComposeTarget(img); }}
-                              className="text-xs bg-sky-500/80 hover:bg-sky-500 text-white px-2 py-1 rounded-lg transition-colors font-medium"
-                            >
-                              🖼️ Place in Scene
-                            </button>
-                            <a
-                              href={img.url}
-                              download
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-xs bg-white/20 hover:bg-white/30 text-white px-2 py-1 rounded-lg transition-colors"
-                            >
-                              Download
-                            </a>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((_, idx) => idx !== i)); }}
-                              className="text-xs bg-red-500/70 hover:bg-red-500 text-white px-2 py-1 rounded-lg transition-colors"
-                            >
-                              🗑️
-                            </button>
+                      ) : (
+                        <>
+                          <Image src={img.url} alt={img.prompt} width={512} height={512}
+                            className="w-full h-auto object-cover" unoptimized
+                            onError={() => setBrokenImages((prev) => new Set(prev).add(img.url))}
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-3 gap-2">
+                            <p className="text-xs text-white/90 line-clamp-2 font-medium leading-relaxed">{img.prompt}</p>
+                            <div className="flex gap-1.5 flex-wrap">
+                              <button onClick={(e) => { e.stopPropagation(); openEditor(img); }}
+                                className="text-xs bg-orange-400 hover:bg-orange-500 text-white px-2.5 py-1 rounded-lg transition-colors font-semibold">✏️ Edit</button>
+                              <button onClick={(e) => { e.stopPropagation(); setComposeTarget(img); }}
+                                className="text-xs bg-sky-500 hover:bg-sky-600 text-white px-2.5 py-1 rounded-lg transition-colors font-semibold">🖼️ Scene</button>
+                              <a href={img.url} download onClick={(e) => e.stopPropagation()}
+                                className="text-xs bg-white/20 hover:bg-white/30 text-white px-2.5 py-1 rounded-lg transition-colors">↓</a>
+                              <button onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((x) => x.url !== img.url)); }}
+                                className="text-xs bg-red-500/70 hover:bg-red-500 text-white px-2.5 py-1 rounded-lg transition-colors">🗑️</button>
+                            </div>
                           </div>
-                        </div>
-                      </>
-                    )}
+                          <div className="absolute top-2 left-2 right-2 flex justify-between items-start pointer-events-none">
+                            {img.sourceUrl && <span className="text-xs bg-orange-400 text-white px-1.5 py-0.5 rounded-md font-semibold">Edited</span>}
+                            <span className={`text-xs px-1.5 py-0.5 rounded-md font-semibold ml-auto ${badgeClass}`}>{modelName}</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
           )}
         </section>
+          </>
+        )}
       </div>
 
       {lightbox && (
