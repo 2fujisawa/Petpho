@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import { getModelConfig, buildImageInput, DEFAULT_MODEL } from "@/lib/models";
+import { rehostAll } from "@/lib/storage";
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
@@ -44,6 +45,7 @@ export async function POST(req: NextRequest) {
   const aspectRatio = (formData.get("aspectRatio") as string) || "1:1";
   const numOutputs = parseInt((formData.get("numOutputs") as string) || "1");
   const modelId = (formData.get("model") as string) || DEFAULT_MODEL;
+  const backgroundPhoto = formData.get("backgroundPhoto");
 
   if (!file || !(file instanceof Blob)) {
     return NextResponse.json({ error: "No photo provided" }, { status: 400 });
@@ -60,20 +62,44 @@ export async function POST(req: NextRequest) {
     : "Transform into Disney Pixar 3D animated style, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality";
 
   let uploadedFile: Awaited<ReturnType<typeof replicate.files.create>> | null = null;
+  let uploadedBackground: Awaited<ReturnType<typeof replicate.files.create>> | null = null;
 
   try {
-    // Upload the image once to Replicate file storage so all concurrent runs
-    // share a small URL string instead of each embedding the full base64 payload.
     uploadedFile = await replicate.files.create(
       new Blob([buffer], { type: mimeType })
     );
     const imageUrl = uploadedFile.urls.get;
 
+    // Two-image flow: pet photo + uploaded background image
+    if (backgroundPhoto instanceof Blob && backgroundPhoto.size > 0) {
+      const bgBuffer = Buffer.from(await backgroundPhoto.arrayBuffer());
+      uploadedBackground = await replicate.files.create(
+        new Blob([bgBuffer], { type: backgroundPhoto.type || "image/jpeg" })
+      );
+
+      const bgPrompt = `Disney Pixar 3D animated style. Take the pet animal from the first image and transform it into a Pixar 3D animated character with big expressive eyes, smooth render, and vibrant colors. Place the Pixar pet sitting naturally inside the scene shown in the second image. Keep the background exactly as shown in the second image. Cinematic lighting, Pixar movie quality.`;
+
+      const runs = Array.from({ length: Math.min(numOutputs, 4) }, () =>
+        replicate.run("google/nano-banana" as `${string}/${string}`, {
+          input: {
+            image_input: [imageUrl, uploadedBackground!.urls.get],
+            prompt: bgPrompt,
+            aspect_ratio: aspectRatio,
+            output_format: "jpg",
+          },
+        })
+      );
+      const outputs = await Promise.all(runs);
+      const images = await rehostAll(outputs.map(String));
+      return NextResponse.json({ images });
+    }
+
+    // Normal single-image flow
     const runs = Array.from({ length: Math.min(numOutputs, 4) }, () =>
       runWithRetry(promptText, imageUrl, aspectRatio, modelId)
     );
     const outputs = await Promise.all(runs);
-    const images = outputs.map(String);
+    const images = await rehostAll(outputs.map(String));
 
     return NextResponse.json({ images });
   } catch (err) {
@@ -82,8 +108,9 @@ export async function POST(req: NextRequest) {
       err instanceof Error ? err.message : "Image generation failed.";
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
-    if (uploadedFile) {
-      replicate.files.delete(uploadedFile.id).catch(() => {});
-    }
+    await Promise.all([
+      uploadedFile && replicate.files.delete(uploadedFile.id).catch(() => {}),
+      uploadedBackground && replicate.files.delete(uploadedBackground.id).catch(() => {}),
+    ]);
   }
 }

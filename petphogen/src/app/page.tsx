@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
 import { MODELS, DEFAULT_MODEL, type ModelId } from "@/lib/models";
+import { BACKGROUNDS } from "@/lib/backgrounds";
 
 const ASPECT_RATIOS = [
   { label: "1:1", value: "1:1" },
@@ -22,6 +23,7 @@ type GeneratedImage = {
 type EditorState = {
   sourceImage: GeneratedImage;
   editPrompt: string;
+  selectedBackground: string | null;
   numOutputs: number;
   aspectRatio: string;
   model: ModelId;
@@ -169,31 +171,94 @@ function ModelSwitcher({
   );
 }
 
+function BackgroundPicker({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">
+        Background <span className="text-gray-400 normal-case font-normal">(optional)</span>
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          onClick={() => onChange(null)}
+          className={`col-span-2 text-xs px-3 py-2 rounded-xl border font-medium transition-all ${
+            value === null
+              ? "bg-orange-400 border-orange-400 text-white shadow-sm"
+              : "bg-orange-50 border-orange-200 text-gray-600 hover:bg-orange-100"
+          }`}
+        >
+          ✕ No Background
+        </button>
+        {BACKGROUNDS.map((bg) => (
+          <button
+            key={bg.id}
+            onClick={() => onChange(value === bg.id ? null : bg.id)}
+            className={`flex flex-col rounded-xl overflow-hidden border-2 transition-all text-left ${
+              value === bg.id
+                ? "border-orange-400 shadow-sm"
+                : "border-orange-100 hover:border-orange-300"
+            }`}
+          >
+            <div className="h-16 overflow-hidden" style={{ background: bg.gradient }} />
+            <p className="text-xs font-medium text-gray-700 py-1.5 px-2 leading-tight bg-white">
+              {bg.name}
+            </p>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoZoom, setPhotoZoom] = useState(1);
+  const [backgroundPhoto, setBackgroundPhoto] = useState<File | null>(null);
+  const [backgroundPhotoPreview, setBackgroundPhotoPreview] = useState<string | null>(null);
+  const [composeTarget, setComposeTarget] = useState<GeneratedImage | null>(null);
+  const [composeLoading, setComposeLoading] = useState(false);
+  const [composeError, setComposeError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [numOutputs, setNumOutputs] = useState(1);
   const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<GeneratedImage[]>(() => {
-    if (typeof window === "undefined") return [];
-    try { return JSON.parse(localStorage.getItem("petpho-history") || "[]"); }
-    catch { return []; }
-  });
+  const [history, setHistory] = useState<GeneratedImage[]>([]);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bgFileInputRef = useRef<HTMLInputElement>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [brushSize, setBrushSize] = useState(30);
   const [brushTool, setBrushTool] = useState<"brush" | "eraser">("brush");
   const [canvasZoom, setCanvasZoom] = useState(1);
   const inpaintCanvasRef = useRef<InpaintCanvasHandle>(null);
+  const historyInitialSaveSkipped = useRef(false);
+  const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
 
+  // Load history from localStorage after client mount
   useEffect(() => {
+    try {
+      const saved = localStorage.getItem("petpho-history");
+      if (saved) setHistory(JSON.parse(saved));
+    } catch {}
+  }, []);
+
+  // Save history to localStorage, but skip the very first run (initial empty [])
+  // so we don't wipe data before the load effect above has set the state
+  useEffect(() => {
+    if (!historyInitialSaveSkipped.current) {
+      historyInitialSaveSkipped.current = true;
+      return;
+    }
     localStorage.setItem("petpho-history", JSON.stringify(history));
   }, [history]);
 
@@ -270,21 +335,31 @@ export default function Home() {
     setError(null);
 
     try {
-      // Apply zoom: draw dog at scaled size centered on a white canvas
+      // Build output canvas at the target aspect ratio with dog scaled to photoZoom
       const zoomedPhoto = await new Promise<File>((resolve) => {
         const img = document.createElement("img");
         img.onload = () => {
+          const [arW, arH] = (aspectRatio || "1:1").split(":").map(Number);
+          const TARGET = 1024;
+          const arScale = Math.min(TARGET / arW, TARGET / arH);
+          const canvasW = Math.round(arW * arScale);
+          const canvasH = Math.round(arH * arScale);
+
           const canvas = document.createElement("canvas");
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
+          canvas.width = canvasW;
+          canvas.height = canvasH;
           const ctx = canvas.getContext("2d")!;
           ctx.fillStyle = "#ffffff";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          const sw = img.naturalWidth * photoZoom;
-          const sh = img.naturalHeight * photoZoom;
-          const sx = (canvas.width - sw) / 2;
-          const sy = (canvas.height - sh) / 2;
-          ctx.drawImage(img, sx, sy, sw, sh);
+          ctx.fillRect(0, 0, canvasW, canvasH);
+
+          // object-fit:contain the dog within photoZoom % of the canvas
+          const maxDogW = canvasW * photoZoom;
+          const maxDogH = canvasH * photoZoom;
+          const dogScale = Math.min(maxDogW / img.naturalWidth, maxDogH / img.naturalHeight);
+          const sw = img.naturalWidth * dogScale;
+          const sh = img.naturalHeight * dogScale;
+          ctx.drawImage(img, (canvasW - sw) / 2, (canvasH - sh) / 2, sw, sh);
+
           canvas.toBlob((blob) => {
             if (blob) resolve(new File([blob], photo!.name, { type: "image/jpeg" }));
           }, "image/jpeg", 0.85);
@@ -294,7 +369,7 @@ export default function Home() {
 
       const formData = new FormData();
       formData.append("photo", zoomedPhoto);
-      formData.append("prompt", prompt);
+      formData.append("prompt", prompt.trim());
       formData.append("aspectRatio", aspectRatio);
       formData.append("numOutputs", String(numOutputs));
       formData.append("model", model);
@@ -320,6 +395,7 @@ export default function Home() {
     setEditor({
       sourceImage: img,
       editPrompt: "",
+      selectedBackground: null,
       numOutputs: 1,
       aspectRatio: "1:1",
       model: img.model,
@@ -330,17 +406,55 @@ export default function Home() {
     });
   }
 
+  async function handleCompose() {
+    if (!composeTarget || !backgroundPhoto) return;
+    setComposeLoading(true);
+    setComposeError(null);
+    try {
+      const fd = new FormData();
+      fd.append("sourceImageUrl", composeTarget.url);
+      fd.append("backgroundPhoto", backgroundPhoto);
+      const res = await fetch("/api/compose", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Compose failed");
+      const newImages: GeneratedImage[] = (data.images as string[]).map((url) => ({
+        url,
+        prompt: composeTarget.prompt + " (placed in scene)",
+        model: "google/nano-banana" as ModelId,
+        sourceUrl: composeTarget.url,
+      }));
+      setHistory((h) => [...newImages, ...h]);
+      setComposeTarget(null);
+      setBackgroundPhoto(null);
+      setBackgroundPhotoPreview(null);
+    } catch (err) {
+      setComposeError(err instanceof Error ? err.message : "Compose failed");
+    } finally {
+      setComposeLoading(false);
+    }
+  }
+
   async function handleApplyEdit() {
-    if (!editor || !editor.editPrompt.trim()) return;
+    if (!editor || (!editor.editPrompt.trim() && !editor.selectedBackground)) return;
     setEditor((e) => e && { ...e, loading: true, error: null });
 
     try {
+      const bgConfig = editor.selectedBackground
+        ? (BACKGROUNDS.find((b) => b.id === editor.selectedBackground) ?? null)
+        : null;
+      const combinedPrompt = [
+        editor.editPrompt.trim(),
+        bgConfig ? `set the background to ${bgConfig.description}` : null,
+      ]
+        .filter(Boolean)
+        .join(", also ");
+
       const res = await fetch("/api/edit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           imageUrl: editor.sourceImage.url,
-          editPrompt: editor.editPrompt,
+          editPrompt: combinedPrompt,
           aspectRatio: editor.aspectRatio,
           numOutputs: editor.numOutputs,
           model: editor.model,
@@ -362,6 +476,108 @@ export default function Home() {
       const msg = err instanceof Error ? err.message : "Something went wrong";
       setEditor((e) => e && { ...e, error: msg, loading: false });
     }
+  }
+
+  // =========================================================
+  // COMPOSE VIEW — place generated pet into a background scene
+  // =========================================================
+  if (composeTarget) {
+    return (
+      <main className="min-h-screen flex flex-col bg-orange-50">
+        <div className="bg-sky-500 text-white text-center text-sm font-medium py-2 tracking-wide">
+          🖼️ Place in Background Scene
+        </div>
+        <header className="bg-white border-b border-orange-100 px-6 py-4 flex items-center gap-4 shadow-sm">
+          <button
+            onClick={() => { setComposeTarget(null); setBackgroundPhoto(null); setBackgroundPhotoPreview(null); setComposeError(null); }}
+            className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-sky-500 transition-colors"
+          >
+            ← Back
+          </button>
+          <span className="text-sky-500 font-semibold text-sm">Place in Scene</span>
+        </header>
+        <div className="flex flex-1 gap-0">
+          {/* Sidebar */}
+          <aside className="w-80 bg-white border-r border-orange-100 flex flex-col gap-5 p-5 overflow-y-auto">
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Your Pixar Pet</label>
+              <div className="rounded-xl overflow-hidden border border-orange-200">
+                <img src={composeTarget.url} alt="Pixar pet" className="w-full h-40 object-cover" />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">
+                Background Photo
+              </label>
+              {backgroundPhotoPreview ? (
+                <div className="relative rounded-xl overflow-hidden border-2 border-sky-300 shadow-sm">
+                  <img src={backgroundPhotoPreview} alt="Background" className="w-full h-40 object-cover" />
+                  <button
+                    onClick={() => { setBackgroundPhoto(null); setBackgroundPhotoPreview(null); }}
+                    className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white text-xs px-2 py-1 rounded-lg transition-colors"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <div
+                  onClick={() => bgFileInputRef.current?.click()}
+                  className="cursor-pointer flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-sky-200 bg-sky-50 hover:border-sky-400 hover:bg-sky-100 py-8 transition-all"
+                >
+                  <span className="text-3xl">🖼️</span>
+                  <p className="text-sm font-medium text-gray-600">Upload a background photo</p>
+                  <p className="text-xs text-gray-400">The AI will place your pet inside it</p>
+                </div>
+              )}
+              <input
+                ref={bgFileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setBackgroundPhoto(file);
+                  setBackgroundPhotoPreview(URL.createObjectURL(file));
+                  e.target.value = "";
+                }}
+              />
+            </div>
+
+            {composeError && (
+              <p className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{composeError}</p>
+            )}
+
+            <button
+              onClick={handleCompose}
+              disabled={composeLoading || !backgroundPhoto}
+              className="w-full py-3 rounded-2xl font-semibold text-sm transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed bg-sky-500 hover:bg-sky-600 text-white flex items-center justify-center gap-2"
+            >
+              {composeLoading
+                ? (<><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Composing...</>)
+                : <>🖼️ Place in Scene</>}
+            </button>
+          </aside>
+
+          {/* Results area */}
+          <section className="flex-1 p-6 overflow-y-auto">
+            {composeLoading && (
+              <div className="flex flex-col items-center justify-center h-64 gap-4">
+                <span className="w-10 h-10 border-4 border-sky-200 border-t-sky-500 rounded-full animate-spin" />
+                <p className="text-sm text-gray-500">Placing your pet in the scene...</p>
+              </div>
+            )}
+            {!composeLoading && !backgroundPhoto && (
+              <div className="flex flex-col items-center justify-center h-64 gap-3 text-gray-400">
+                <span className="text-5xl">🖼️</span>
+                <p className="text-sm font-medium">Upload a background photo to get started</p>
+              </div>
+            )}
+          </section>
+        </div>
+      </main>
+    );
   }
 
   // =========================================================
@@ -439,6 +655,10 @@ export default function Home() {
                     <p className="text-xs text-gray-400">⌘ + Enter to apply</p>
                   </div>
                   <ModelSwitcher value={editor.model} onChange={(id) => setEditor((ed) => ed && { ...ed, model: id })} />
+                  <BackgroundPicker
+                    value={editor.selectedBackground}
+                    onChange={(id) => setEditor((ed) => ed && { ...ed, selectedBackground: id })}
+                  />
                   <div className="flex flex-col gap-2">
                     <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Aspect Ratio</label>
                     <div className="flex flex-wrap gap-2">
@@ -459,7 +679,7 @@ export default function Home() {
                       className="w-full accent-orange-400" />
                     <div className="flex justify-between text-xs text-gray-400"><span>1</span><span>4</span></div>
                   </div>
-                  <button onClick={handleApplyEdit} disabled={editor.loading || !editor.editPrompt.trim()}
+                  <button onClick={handleApplyEdit} disabled={editor.loading || (!editor.editPrompt.trim() && !editor.selectedBackground)}
                     className="w-full py-3 rounded-xl font-bold text-sm text-white bg-orange-400 hover:bg-orange-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm flex items-center justify-center gap-2">
                     {editor.loading ? (<><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Applying edit...</>) : <>✏️ Apply Edit</>}
                   </button>
@@ -658,7 +878,7 @@ export default function Home() {
             </label>
             {photoPreview ? (
               <div className="flex flex-col gap-2">
-                <div className="relative rounded-2xl overflow-hidden border-2 border-orange-300 shadow-sm bg-white flex items-center justify-center" style={{ height: 192 }}>
+                <div className="relative rounded-2xl overflow-hidden border-2 border-orange-300 shadow-sm bg-white flex items-center justify-center w-full" style={{ aspectRatio: aspectRatio.replace(":", "/") }}>
                   <img
                     src={photoPreview}
                     alt="Uploaded pet"
@@ -733,6 +953,7 @@ export default function Home() {
 
           {/* Model switcher */}
           <ModelSwitcher value={model} onChange={setModel} />
+
 
           {/* Aspect ratio */}
           <div className="flex flex-col gap-2">
@@ -818,61 +1039,85 @@ export default function Home() {
                     style={{ aspectRatio: aspectRatio.replace(":", "/") }}
                   />
                 ))}
-              {history.map((img, i) => (
-                <div
-                  key={`${img.url}-${i}`}
-                  className="break-inside-avoid group relative rounded-2xl overflow-hidden border-2 border-transparent hover:border-orange-400 transition-all shadow-sm hover:shadow-md cursor-pointer"
-                  onClick={() => setLightbox(img.url)}
-                >
-                  {img.sourceUrl && (
-                    <div className="absolute top-2 left-2 z-10 bg-orange-400 text-white text-xs px-2 py-0.5 rounded-full font-medium">
-                      Edited
-                    </div>
-                  )}
-                  <div className="absolute top-2 right-2 z-10 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
-                    {MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1]}
+              {history.map((img, i) => {
+                const isBroken = brokenImages.has(img.url);
+                return (
+                  <div
+                    key={`${img.url}-${i}`}
+                    className={`break-inside-avoid group relative rounded-2xl overflow-hidden border-2 transition-all shadow-sm ${
+                      isBroken
+                        ? "border-gray-200 cursor-default"
+                        : "border-transparent hover:border-orange-400 hover:shadow-md cursor-pointer"
+                    }`}
+                    onClick={() => !isBroken && setLightbox(img.url)}
+                  >
+                    {isBroken ? (
+                      <div className="aspect-square bg-gray-100 flex flex-col items-center justify-center gap-2 p-4">
+                        <span className="text-3xl opacity-40">🖼️</span>
+                        <p className="text-xs text-gray-400 text-center font-medium">Expired</p>
+                        <p className="text-xs text-gray-400 text-center line-clamp-2 italic">{img.prompt}</p>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((_, idx) => idx !== i)); }}
+                          className="mt-1 text-xs bg-red-100 hover:bg-red-200 text-red-500 px-3 py-1 rounded-lg transition-colors font-medium"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {img.sourceUrl && (
+                          <div className="absolute top-2 left-2 z-10 bg-orange-400 text-white text-xs px-2 py-0.5 rounded-full font-medium">
+                            Edited
+                          </div>
+                        )}
+                        <div className="absolute top-2 right-2 z-10 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
+                          {MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1]}
+                        </div>
+                        <Image
+                          src={img.url}
+                          alt={img.prompt}
+                          width={512}
+                          height={512}
+                          className="w-full h-auto object-cover"
+                          unoptimized
+                          onError={() => setBrokenImages((prev) => new Set(prev).add(img.url))}
+                        />
+                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 gap-2">
+                          <p className="text-xs text-white/90 line-clamp-2 font-medium">{img.prompt}</p>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); openEditor(img); }}
+                              className="text-xs bg-orange-400 hover:bg-orange-500 text-white px-2 py-1 rounded-lg transition-colors font-medium"
+                            >
+                              ✏️ Edit
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setComposeTarget(img); }}
+                              className="text-xs bg-sky-500/80 hover:bg-sky-500 text-white px-2 py-1 rounded-lg transition-colors font-medium"
+                            >
+                              🖼️ Place in Scene
+                            </button>
+                            <a
+                              href={img.url}
+                              download
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-xs bg-white/20 hover:bg-white/30 text-white px-2 py-1 rounded-lg transition-colors"
+                            >
+                              Download
+                            </a>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((_, idx) => idx !== i)); }}
+                              className="text-xs bg-red-500/70 hover:bg-red-500 text-white px-2 py-1 rounded-lg transition-colors"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  <Image
-                    src={img.url}
-                    alt={img.prompt}
-                    width={512}
-                    height={512}
-                    className="w-full h-auto object-cover"
-                    unoptimized
-                  />
-                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 gap-2">
-                    <p className="text-xs text-white/90 line-clamp-2 font-medium">{img.prompt}</p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); openEditor(img); }}
-                        className="text-xs bg-orange-400 hover:bg-orange-500 text-white px-2 py-1 rounded-lg transition-colors font-medium"
-                      >
-                        ✏️ Edit
-                      </button>
-                      <a
-                        href={img.url}
-                        download
-                        onClick={(e) => e.stopPropagation()}
-                        className="text-xs bg-white/20 hover:bg-white/30 text-white px-2 py-1 rounded-lg transition-colors"
-                      >
-                        Download
-                      </a>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(img.url); }}
-                        className="text-xs bg-white/20 hover:bg-white/30 text-white px-2 py-1 rounded-lg transition-colors"
-                      >
-                        Copy URL
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setHistory((h) => h.filter((_, idx) => idx !== i)); }}
-                        className="text-xs bg-red-500/70 hover:bg-red-500 text-white px-2 py-1 rounded-lg transition-colors"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>

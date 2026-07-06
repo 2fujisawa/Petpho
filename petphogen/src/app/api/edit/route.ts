@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import { getModelConfig, buildImageInput, DEFAULT_MODEL } from "@/lib/models";
+import { rehostAll } from "@/lib/storage";
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
       runWithRetry(prompt, imageUrl, aspectRatio || "1:1", modelId)
     );
     const outputs = await Promise.all(runs);
-    const images = outputs.map(String);
+    const images = await rehostAll(outputs.map(String));
 
     return NextResponse.json({ images });
   } catch (err) {

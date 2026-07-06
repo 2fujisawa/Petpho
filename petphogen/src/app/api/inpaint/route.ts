@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
+import { rehostAll } from "@/lib/storage";
 
 const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
@@ -36,7 +37,8 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ images: [String(output)] });
+    const images = await rehostAll([String(output)]);
+    return NextResponse.json({ images });
   } catch (err) {
     console.error("Inpaint error:", err);
     return NextResponse.json(
