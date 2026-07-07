@@ -1,7 +1,74 @@
 @import "tailwindcss";
 
+body {
+  background-color: #0a0a0c;
+  color: #e4e4e7;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(251, 146, 60, 0.35);
+  color: #fff;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* ── Range sliders ──────────────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fb923c;
+  box-shadow: 0 0 0 4px rgba(251, 146, 60, 0.15);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 0 7px rgba(251, 146, 60, 0.22);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: #fb923c;
+  box-shadow: 0 0 0 4px rgba(251, 146, 60, 0.15);
+  cursor: pointer;
+}
+
+/* ── Keyframes ──────────────────────────────────────────── */
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(14px); }
+  from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -11,18 +78,113 @@
 }
 
 @keyframes scale-in {
-  from { opacity: 0; transform: scale(0.96); }
+  from { opacity: 0; transform: scale(0.94); }
   to   { opacity: 1; transform: scale(1); }
 }
 
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position: 600px 0; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-10px); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 24px rgba(251, 146, 60, 0.25); }
+  50%      { box-shadow: 0 0 44px rgba(251, 146, 60, 0.5); }
+}
+
+@keyframes gradient-pan {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
 .animate-fade-up {
-  animation: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .animate-fade-in {
-  animation: fade-in 0.25s ease both;
+  animation: fade-in 0.3s ease both;
 }
 
 .animate-scale-in {
-  animation: scale-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: scale-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-float {
+  animation: float 3.2s ease-in-out infinite;
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 2.4s ease-in-out infinite;
+}
+
+/* ── Shimmer loading skeleton ───────────────────────────── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    #16161a 25%,
+    #202027 50%,
+    #16161a 75%
+  );
+  background-size: 1200px 100%;
+  animation: shimmer 1.8s linear infinite;
+}
+
+/* ── Primary gradient button with shine sweep ───────────── */
+.btn-primary {
+  position: relative;
+  overflow: hidden;
+  background-image: linear-gradient(120deg, #f97316, #fb923c, #f59e0b, #f97316);
+  background-size: 250% 250%;
+  animation: gradient-pan 5s ease infinite;
+  transition: transform 0.15s ease, box-shadow 0.25s ease, filter 0.25s ease;
+  box-shadow: 0 4px 20px rgba(249, 115, 22, 0.28);
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 6px 32px rgba(249, 115, 22, 0.45);
+  filter: brightness(1.06);
+}
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn-primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 40%,
+    rgba(255, 255, 255, 0.28) 50%,
+    transparent 60%
+  );
+  transform: translateX(-120%);
+}
+.btn-primary:hover:not(:disabled)::after {
+  transform: translateX(120%);
+  transition: transform 0.7s ease;
+}
+
+/* ── Card hover glow ────────────────────────────────────── */
+.card-glow {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.25s ease;
+}
+.card-glow:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55),
+              0 0 0 1px rgba(251, 146, 60, 0.35);
 }

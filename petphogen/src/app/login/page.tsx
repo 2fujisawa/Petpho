@@ -48,7 +48,7 @@ function LoginForm() {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">
+        <label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-[0.14em]">
           Password
         </label>
         <input
@@ -57,22 +57,22 @@ function LoginForm() {
           value={password}
           onChange={(e) => { setPassword(e.target.value); setError(""); }}
           placeholder="Enter access password"
-          className={`w-full px-4 py-3 rounded-xl border text-sm transition-all outline-none ${
+          className={`w-full px-4 py-3 rounded-xl border text-sm text-zinc-100 placeholder-zinc-600 transition-all duration-200 outline-none ${
             error
-              ? "border-red-300 bg-red-50 focus:ring-2 focus:ring-red-100"
-              : "border-gray-200 focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+              ? "border-red-500/40 bg-red-500/[0.06] focus:ring-2 focus:ring-red-500/15"
+              : "border-white/[0.08] bg-white/[0.04] focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15"
           }`}
           autoComplete="current-password"
         />
         {error && (
-          <p className="text-xs text-red-500 font-medium animate-fade-in">{error}</p>
+          <p className="text-xs text-red-400 font-medium animate-fade-in">{error}</p>
         )}
       </div>
 
       <button
         type="submit"
         disabled={loading || !password.trim()}
-        className="w-full py-3 rounded-xl font-bold text-sm text-white bg-orange-400 hover:bg-orange-500 active:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm flex items-center justify-center gap-2 mt-1"
+        className="btn-primary w-full py-3 rounded-xl font-bold text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none flex items-center justify-center gap-2 mt-1"
       >
         {loading ? (
           <>
@@ -89,25 +89,25 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <main className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+    <main className="min-h-screen bg-[#0a0a0c] flex items-center justify-center p-6">
       <div className="w-full max-w-sm animate-scale-in">
-        <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-8">
+        <div className="bg-[#131316] rounded-3xl ring-1 ring-white/[0.07] shadow-2xl shadow-black/50 p-8">
           <div className="flex flex-col items-center gap-3 mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-orange-400 flex items-center justify-center text-2xl shadow-md">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-2xl shadow-lg shadow-orange-500/25 animate-float">
               🐶
             </div>
             <div className="text-center">
-              <h1 className="font-extrabold text-2xl tracking-tight text-gray-900">
+              <h1 className="font-extrabold text-2xl tracking-tight text-white">
                 PETPHO <span className="text-orange-400">Gen</span>
               </h1>
-              <p className="text-sm text-gray-500 mt-1">Admin access required</p>
+              <p className="text-sm text-zinc-500 mt-1">Admin access required</p>
             </div>
           </div>
           <Suspense fallback={<div className="h-24" />}>
             <LoginForm />
           </Suspense>
         </div>
-        <p className="text-center text-xs text-gray-400 mt-4">
+        <p className="text-center text-xs text-zinc-700 mt-4">
           Petpho Gen · Admin Tool
         </p>
       </div>

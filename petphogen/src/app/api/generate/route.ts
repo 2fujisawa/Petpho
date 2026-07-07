@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
-import { getModelConfig, buildImageInput, DEFAULT_MODEL } from "@/lib/models";
+import { getModelConfig, buildImageInput, extractImageUrl, DEFAULT_MODEL } from "@/lib/models";
 import { rehostAll } from "@/lib/storage";
 
 const replicate = new Replicate({
@@ -22,7 +22,8 @@ async function runWithRetry(
         input: {
           prompt,
           aspect_ratio: aspectRatio,
-          output_format: "jpg",
+          output_format: config.outputFormat,
+          ...config.extraInput,
           ...buildImageInput(config, dataUrl),
         },
       });
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
       runWithRetry(promptText, imageUrl, aspectRatio, modelId)
     );
     const outputs = await Promise.all(runs);
-    const images = await rehostAll(outputs.map(String));
+    const images = await rehostAll(outputs.map(extractImageUrl));
 
     return NextResponse.json({ images });
   } catch (err) {
