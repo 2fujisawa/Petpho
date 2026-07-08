@@ -6,6 +6,16 @@ export const metadata: Metadata = {
   description: "Admin tool for generating Pixar-style pet portraits",
 };
 
+const THEME_INIT_SCRIPT = `
+(function () {
+  try {
+    var stored = localStorage.getItem("petpho-theme");
+    var dark = stored ? stored === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.classList.toggle("dark", dark);
+  } catch (e) {}
+})();
+`;
+
 export default function RootLayout({
   children,
 }: {
@@ -13,7 +23,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-orange-50 text-gray-800 min-h-screen antialiased">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
+      <body className="min-h-screen antialiased">
         {children}
       </body>
     </html>

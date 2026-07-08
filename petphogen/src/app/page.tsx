@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
 import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, type ModelId, type ModelConfig } from "@/lib/models";
 import { BACKGROUNDS } from "@/lib/backgrounds";
+import { PREMADE_BACKGROUNDS } from "@/lib/premadeBackgrounds";
 
 const ASPECT_RATIOS = [
   { label: "1:1", value: "1:1" },
@@ -113,9 +114,9 @@ const InpaintCanvas = forwardRef<
 
 const label = "text-[11px] font-semibold text-zinc-500 uppercase tracking-[0.14em]";
 const inputDark =
-  "w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 resize-none focus:outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15 transition-all duration-200";
+  "w-full bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-600 resize-none focus:outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15 transition-all duration-200";
 const chipOff =
-  "bg-white/[0.03] border-white/[0.08] text-zinc-400 hover:bg-white/[0.07] hover:text-zinc-200 hover:border-white/[0.14]";
+  "bg-black/[0.03] dark:bg-white/[0.03] border-black/[0.08] dark:border-white/[0.08] text-zinc-600 dark:text-zinc-400 hover:bg-black/[0.07] dark:hover:bg-white/[0.07] hover:text-zinc-800 dark:hover:text-zinc-200 hover:border-black/[0.14] dark:hover:border-white/[0.14]";
 const chipOn = "bg-orange-500 border-orange-500 text-white shadow-lg shadow-orange-500/25";
 
 function ModelSwitcher({
@@ -123,12 +124,33 @@ function ModelSwitcher({
   onChange,
   models = MODELS,
   title = "Model",
+  compact = false,
 }: {
   value: ModelId;
   onChange: (id: ModelId) => void;
   models?: ModelConfig[];
   title?: string;
+  compact?: boolean;
 }) {
+  if (compact) {
+    return (
+      <div className="flex flex-col gap-2">
+        <label className={label}>{title}</label>
+        <div className="flex flex-wrap gap-2">
+          {models.map((m) => (
+            <button key={m.id} onClick={() => onChange(m.id)}
+              title={`${m.provider} — ${m.description}`}
+              className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all duration-200 whitespace-nowrap ${
+                value === m.id ? chipOn : chipOff
+              }`}>
+              {m.name}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <label className={label}>{title}</label>
@@ -138,7 +160,7 @@ function ModelSwitcher({
             className={`text-left rounded-xl border px-3 py-2.5 transition-all duration-200 ${
               value === m.id
                 ? "bg-gradient-to-r from-orange-500 to-amber-500 border-transparent text-white shadow-lg shadow-orange-500/20"
-                : "bg-white/[0.03] border-white/[0.07] text-zinc-300 hover:bg-white/[0.06] hover:border-white/[0.14]"
+                : "bg-black/[0.03] dark:bg-white/[0.03] border-black/[0.07] dark:border-white/[0.07] text-zinc-700 dark:text-zinc-300 hover:bg-black/[0.06] dark:hover:bg-white/[0.06] hover:border-black/[0.14] dark:hover:border-white/[0.14]"
             }`}>
             <p className="text-xs font-bold leading-tight">{m.name}</p>
             <p className={`text-xs mt-0.5 leading-tight ${value === m.id ? "text-white/80" : "text-zinc-500"}`}>
@@ -167,10 +189,10 @@ function BackgroundPicker({ value, onChange }: { value: string | null; onChange:
         {BACKGROUNDS.map((bg) => (
           <button key={bg.id} onClick={() => onChange(value === bg.id ? null : bg.id)}
             className={`flex flex-col rounded-xl overflow-hidden border-2 transition-all duration-200 text-left ${
-              value === bg.id ? "border-orange-400 shadow-lg shadow-orange-500/15" : "border-white/[0.07] hover:border-white/[0.2]"
+              value === bg.id ? "border-orange-400 shadow-lg shadow-orange-500/15" : "border-black/[0.07] dark:border-white/[0.07] hover:border-black/[0.2] dark:hover:border-white/[0.2]"
             }`}>
             <div className="h-16 overflow-hidden" style={{ background: bg.gradient }} />
-            <p className="text-xs font-medium text-zinc-300 py-1.5 px-2 leading-tight bg-[#17171a]">{bg.name}</p>
+            <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300 py-1.5 px-2 leading-tight bg-gray-100 dark:bg-[#17171a]">{bg.name}</p>
           </button>
         ))}
       </div>
@@ -216,11 +238,11 @@ function ImageCard({
   showDate?: boolean;
 }) {
   const modelName = MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1];
-  const badgeClass = MODEL_BADGE[img.model] ?? "bg-white/10 text-zinc-300";
+  const badgeClass = MODEL_BADGE[img.model] ?? "bg-white/10 text-zinc-700 dark:text-zinc-300";
   return (
     <div className="break-inside-avoid animate-fade-up" style={{ animationDelay: `${Math.min(index * 35, 350)}ms` }}>
       <div
-        className={`group relative rounded-xl overflow-hidden bg-[#131316] ring-1 ring-white/[0.06] ${
+        className={`group relative rounded-xl overflow-hidden bg-white dark:bg-[#131316] ring-1 ring-black/[0.06] dark:ring-white/[0.06] ${
           isBroken ? "cursor-default" : "card-glow cursor-pointer"
         }`}
         onClick={() => !isBroken && onOpen()}
@@ -296,6 +318,10 @@ export default function Home() {
   const [photoZoom, setPhotoZoom] = useState(1);
   const [backgroundPhoto, setBackgroundPhoto] = useState<File | null>(null);
   const [backgroundPhotoPreview, setBackgroundPhotoPreview] = useState<string | null>(null);
+  const [bgSourceTab, setBgSourceTab] = useState<"upload" | "premade">(
+    PREMADE_BACKGROUNDS.length > 0 ? "premade" : "upload"
+  );
+  const [selectedPremadeBg, setSelectedPremadeBg] = useState<string | null>(null);
   const [bgAspect, setBgAspect] = useState<number | null>(null);
   const [petPos, setPetPos] = useState({ x: 50, y: 65 });
   const [petScale, setPetScale] = useState(35);
@@ -310,6 +336,7 @@ export default function Home() {
   const [historySearch, setHistorySearch] = useState("");
   const [historyFilter, setHistoryFilter] = useState<ModelId | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [showPromptHint, setShowPromptHint] = useState(false);
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [numOutputs, setNumOutputs] = useState(1);
   const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
@@ -327,6 +354,20 @@ export default function Home() {
   const inpaintCanvasRef = useRef<InpaintCanvasHandle>(null);
   const historyInitialSaveSkipped = useRef(false);
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
+  const [isDark, setIsDark] = useState(true);
+
+  useEffect(() => {
+    setIsDark(document.documentElement.classList.contains("dark"));
+  }, []);
+
+  function toggleTheme() {
+    const next = !isDark;
+    setIsDark(next);
+    document.documentElement.classList.toggle("dark", next);
+    try {
+      localStorage.setItem("petpho-theme", next ? "dark" : "light");
+    } catch {}
+  }
 
   useEffect(() => {
     try {
@@ -397,6 +438,18 @@ export default function Home() {
     setDragging(false);
     const file = e.dataTransfer.files[0];
     if (file) handleFile(file);
+  }
+
+  async function selectPremadeBackground(bg: { id: string; file: string }) {
+    const res = await fetch(bg.file);
+    const blob = await res.blob();
+    const file = new File([blob], `${bg.id}.jpg`, { type: blob.type || "image/jpeg" });
+    setBackgroundPhoto(file);
+    setBackgroundPhotoPreview(bg.file);
+    setSelectedPremadeBg(bg.id);
+    setBgAspect(null);
+    setPetPos({ x: 50, y: 65 });
+    setPetScale(35);
   }
 
   async function handleGenerate() {
@@ -485,6 +538,7 @@ export default function Home() {
       setComposeTarget(null);
       setBackgroundPhoto(null);
       setBackgroundPhotoPreview(null);
+      setSelectedPremadeBg(null);
       setBgAspect(null);
       setPetPos({ x: 50, y: 65 });
       setPetScale(35);
@@ -557,21 +611,21 @@ export default function Home() {
   const errorBox = "text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2 animate-fade-in";
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#0a0a0c] text-zinc-200">
+    <div className="flex h-screen overflow-hidden bg-[#f7f7f8] dark:bg-[#0a0a0c] text-zinc-800 dark:text-zinc-200">
 
       {/* ── Sidebar ──────────────────────────────────────────── */}
-      <nav className="w-[200px] flex-shrink-0 flex flex-col bg-[#101012] border-r border-white/[0.05]">
+      <nav className="w-[200px] flex-shrink-0 flex flex-col bg-white dark:bg-[#101012] border-r border-black/[0.05] dark:border-white/[0.05]">
         <div className="px-4 pt-5 pb-4 flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-base shadow-lg shadow-orange-500/25 flex-shrink-0">
             🐶
           </div>
           <div className="min-w-0">
-            <p className="text-white font-extrabold text-sm tracking-tight leading-tight">PETPHO</p>
+            <p className="text-zinc-900 dark:text-white font-extrabold text-sm tracking-tight leading-tight">PETPHO</p>
             <p className="text-orange-400 text-[11px] font-semibold leading-tight">Gen</p>
           </div>
         </div>
 
-        <div className="mx-3 h-px bg-white/[0.05] mb-3" />
+        <div className="mx-3 h-px bg-black/[0.05] dark:bg-white/[0.05] mb-3" />
 
         <div className="px-2 flex flex-col gap-1">
           {([
@@ -585,8 +639,8 @@ export default function Home() {
                 onClick={() => navTo(item.id)}
                 className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-xl w-full text-left transition-all duration-200 ${
                   active
-                    ? "bg-white/[0.08] text-white"
-                    : "text-zinc-500 hover:text-zinc-200 hover:bg-white/[0.04]"
+                    ? "bg-black/[0.08] dark:bg-white/[0.08] text-zinc-900 dark:text-white"
+                    : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.04] dark:hover:bg-white/[0.04]"
                 }`}
               >
                 {active && (
@@ -598,7 +652,7 @@ export default function Home() {
                 <span className="text-sm font-medium flex-1">{item.name}</span>
                 {item.id === "history" && history.length > 0 && (
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold transition-colors duration-200 ${
-                    active ? "bg-orange-400/20 text-orange-300" : "bg-white/[0.06] text-zinc-600"
+                    active ? "bg-orange-400/20 text-orange-300" : "bg-black/[0.06] dark:bg-white/[0.06] text-zinc-600"
                   }`}>
                     {history.length}
                   </span>
@@ -610,7 +664,17 @@ export default function Home() {
 
         <div className="flex-1" />
 
-        <div className="px-4 py-4 border-t border-white/[0.05] flex items-center gap-2">
+        <div className="px-2 pb-2">
+          <button
+            onClick={toggleTheme}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl w-full text-left text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.04] dark:hover:bg-white/[0.04] transition-all duration-200"
+          >
+            <span className="text-base leading-none">{isDark ? "🌙" : "☀️"}</span>
+            <span className="text-sm font-medium">{isDark ? "Dark" : "Light"}</span>
+          </button>
+        </div>
+
+        <div className="px-4 py-4 border-t border-black/[0.05] dark:border-white/[0.05] flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
           <span className="text-[10px] text-zinc-600 font-semibold uppercase tracking-[0.14em]">Admin</span>
         </div>
@@ -622,27 +686,63 @@ export default function Home() {
         {/* COMPOSE VIEW */}
         {composeTarget && (
           <div className="flex-1 flex overflow-hidden animate-fade-in">
-            <aside className="w-[300px] bg-[#111114] border-r border-white/[0.06] flex flex-col gap-5 p-5 overflow-y-auto flex-shrink-0">
+            <aside className="w-[300px] bg-white dark:bg-[#111114] border-r border-black/[0.06] dark:border-white/[0.06] flex flex-col gap-5 p-5 overflow-y-auto flex-shrink-0">
               <div className="flex items-center gap-3 pb-1">
                 <button
-                  onClick={() => { setComposeTarget(null); setBackgroundPhoto(null); setBackgroundPhotoPreview(null); setBgAspect(null); setComposeError(null); }}
-                  className="w-7 h-7 rounded-lg bg-white/[0.05] hover:bg-white/[0.12] text-zinc-400 hover:text-white transition-all flex items-center justify-center text-sm"
+                  onClick={() => { setComposeTarget(null); setBackgroundPhoto(null); setBackgroundPhotoPreview(null); setSelectedPremadeBg(null); setBgAspect(null); setComposeError(null); }}
+                  className="w-7 h-7 rounded-lg bg-black/[0.05] dark:bg-white/[0.05] hover:bg-black/[0.12] dark:hover:bg-white/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center text-sm"
                 >
                   ←
                 </button>
-                <span className="font-bold text-white text-sm">Place in Scene</span>
+                <span className="font-bold text-zinc-900 dark:text-white text-sm">Place in Scene</span>
               </div>
 
               <div className="flex flex-col gap-2">
                 <label className={label}>Your Pixar Pet</label>
-                <div className="rounded-xl overflow-hidden ring-1 ring-white/[0.1]">
+                <div className="rounded-xl overflow-hidden ring-1 ring-black/[0.1] dark:ring-white/[0.1]">
                   <img src={composeTarget.url} alt="Pixar pet" className="w-full h-40 object-cover" />
                 </div>
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className={label}>Background Photo</label>
-                {backgroundPhotoPreview ? (
+                <div className="flex items-center justify-between">
+                  <label className={label}>Background Photo</label>
+                  <div className="flex rounded-lg bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.07] dark:border-white/[0.07] p-0.5 text-[11px] font-semibold">
+                    <button onClick={() => setBgSourceTab("premade")}
+                      className={`px-2.5 py-1 rounded-md transition-all duration-200 ${
+                        bgSourceTab === "premade" ? "bg-sky-500 text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                      }`}>
+                      Premade
+                    </button>
+                    <button onClick={() => setBgSourceTab("upload")}
+                      className={`px-2.5 py-1 rounded-md transition-all duration-200 ${
+                        bgSourceTab === "upload" ? "bg-sky-500 text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                      }`}>
+                      Upload
+                    </button>
+                  </div>
+                </div>
+
+                {bgSourceTab === "premade" ? (
+                  PREMADE_BACKGROUNDS.length > 0 ? (
+                    <div className="grid grid-cols-3 gap-2">
+                      {PREMADE_BACKGROUNDS.map((bg) => (
+                        <button key={bg.id} onClick={() => selectPremadeBackground(bg)}
+                          title={bg.name}
+                          className={`relative rounded-lg overflow-hidden aspect-square ring-2 transition-all duration-200 ${
+                            selectedPremadeBg === bg.id ? "ring-orange-400" : "ring-black/[0.08] dark:ring-white/[0.08] hover:ring-black/[0.3] dark:hover:ring-white/[0.3]"
+                          }`}>
+                          <img src={bg.file} alt={bg.name} className="w-full h-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border-2 border-dashed border-black/[0.1] dark:border-white/[0.1] bg-black/[0.02] dark:bg-white/[0.02] py-6 px-3 text-center">
+                      <p className="text-xs text-zinc-500">No premade backgrounds yet</p>
+                      <p className="text-[11px] text-zinc-600 mt-1">Add photos to public/backgrounds</p>
+                    </div>
+                  )
+                ) : backgroundPhotoPreview && !selectedPremadeBg ? (
                   <div className="relative rounded-xl overflow-hidden ring-2 ring-sky-400/50 animate-scale-in">
                     <img src={backgroundPhotoPreview} alt="Background" className="w-full h-24 object-cover" />
                     <button
@@ -658,7 +758,7 @@ export default function Home() {
                     className="cursor-pointer flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-sky-400/25 bg-sky-400/[0.04] hover:border-sky-400/60 hover:bg-sky-400/[0.1] py-8 transition-all duration-200"
                   >
                     <span className="text-3xl">🖼️</span>
-                    <p className="text-sm font-medium text-zinc-300">Upload a background</p>
+                    <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Upload a background</p>
                     <p className="text-xs text-zinc-600">Drag your pet into place after</p>
                   </div>
                 )}
@@ -668,6 +768,7 @@ export default function Home() {
                     if (!file) return;
                     setBackgroundPhoto(file);
                     setBackgroundPhotoPreview(URL.createObjectURL(file));
+                    setSelectedPremadeBg(null);
                     setBgAspect(null);
                     setPetPos({ x: 50, y: 65 });
                     setPetScale(35);
@@ -730,13 +831,13 @@ export default function Home() {
                     <span className="block w-14 h-14 border-4 border-sky-500/20 border-t-sky-400 rounded-full animate-spin" />
                     <span className="absolute inset-0 rounded-full animate-glow-pulse" style={{ boxShadow: "0 0 30px rgba(56,189,248,0.3)" }} />
                   </div>
-                  <p className="text-sm text-zinc-400">Placing your pet in the scene...</p>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400">Placing your pet in the scene...</p>
                 </div>
               ) : backgroundPhotoPreview ? (
                 <div className="flex flex-col items-center gap-3 animate-scale-in w-full">
                   <div
                     ref={stageRef}
-                    className="relative rounded-2xl overflow-hidden ring-1 ring-white/[0.1] shadow-2xl shadow-black/50 select-none bg-black/20"
+                    className="relative rounded-2xl overflow-hidden ring-1 ring-black/[0.1] dark:ring-white/[0.1] shadow-2xl shadow-black/50 select-none bg-black/20"
                     style={{ aspectRatio: bgAspect ? `${bgAspect}` : "16/9", width: "100%", maxWidth: 640 }}
                   >
                     <img
@@ -796,13 +897,13 @@ export default function Home() {
         {/* EDITOR VIEW */}
         {!composeTarget && editor && (
           <div className="flex-1 flex overflow-hidden animate-fade-in">
-            <div className="flex flex-col w-[280px] bg-[#111114] border-r border-white/[0.06] p-5 gap-4 overflow-y-auto flex-shrink-0">
+            <div className="flex flex-col w-[280px] bg-white dark:bg-[#111114] border-r border-black/[0.06] dark:border-white/[0.06] p-5 gap-4 overflow-y-auto flex-shrink-0">
               <div className="flex items-center gap-3 pb-1">
                 <button onClick={() => setEditor(null)}
-                  className="w-7 h-7 rounded-lg bg-white/[0.05] hover:bg-white/[0.12] text-zinc-400 hover:text-white transition-all flex items-center justify-center text-sm">
+                  className="w-7 h-7 rounded-lg bg-black/[0.05] dark:bg-white/[0.05] hover:bg-black/[0.12] dark:hover:bg-white/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center text-sm">
                   ←
                 </button>
-                <span className="font-bold text-white text-sm">Image Editor</span>
+                <span className="font-bold text-zinc-900 dark:text-white text-sm">Image Editor</span>
               </div>
 
               <div className="rounded-xl overflow-hidden ring-1 ring-orange-400/40 shadow-lg shadow-black/30">
@@ -811,20 +912,20 @@ export default function Home() {
               <p className="text-xs text-zinc-500 italic line-clamp-2">&ldquo;{editor.sourceImage.prompt}&rdquo;</p>
 
               {/* Mode switcher */}
-              <div className="flex rounded-xl bg-white/[0.04] border border-white/[0.07] p-1 text-xs font-bold">
+              <div className="flex rounded-xl bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.07] dark:border-white/[0.07] p-1 text-xs font-bold">
                 {(["text", "brush"] as const).map((m) => (
                   <button key={m} onClick={() => setEditor((e) => e && { ...e, mode: m })}
                     className={`flex-1 py-2 rounded-lg transition-all duration-200 ${
                       editor.mode === m
                         ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-md shadow-orange-500/20"
-                        : "text-zinc-500 hover:text-zinc-200"
+                        : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
                     }`}>
                     {m === "text" ? "✏️ Text" : "🖌️ Brush"}
                   </button>
                 ))}
               </div>
 
-              <div className="border-t border-white/[0.06] pt-4 flex flex-col gap-4">
+              <div className="border-t border-black/[0.06] dark:border-white/[0.06] pt-4 flex flex-col gap-4">
                 {editor.mode === "text" ? (
                   <>
                     <div className="flex flex-col gap-2">
@@ -925,7 +1026,7 @@ export default function Home() {
                       <div className="flex flex-wrap gap-3">
                         {editor.results.map((img, i) => (
                           <div key={`${img.url}-${i}`}
-                            className="group relative rounded-xl overflow-hidden ring-1 ring-white/[0.08] card-glow cursor-pointer w-64 animate-scale-in"
+                            className="group relative rounded-xl overflow-hidden ring-1 ring-black/[0.08] dark:ring-white/[0.08] card-glow cursor-pointer w-64 animate-scale-in"
                             onClick={() => setLightbox(img.url)}>
                             <Image src={img.url} alt={img.prompt} width={512} height={512} className="w-full h-auto object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
@@ -944,7 +1045,7 @@ export default function Home() {
               ) : editor.results.length === 0 && !editor.loading ? (
                 <div className="h-full flex flex-col items-center justify-center gap-4 text-zinc-600">
                   <div className="text-6xl animate-float">✏️</div>
-                  <p className="text-base font-medium text-zinc-400">Describe your edit and hit Apply</p>
+                  <p className="text-base font-medium text-zinc-600 dark:text-zinc-400">Describe your edit and hit Apply</p>
                   <p className="text-sm text-zinc-600">Each edit builds on the source image</p>
                 </div>
               ) : (
@@ -962,7 +1063,7 @@ export default function Home() {
                       <div className="flex flex-wrap gap-3">
                         {editor.results.map((img, i) => (
                           <div key={`${img.url}-${i}`}
-                            className="group relative rounded-xl overflow-hidden ring-1 ring-white/[0.08] card-glow cursor-pointer w-64 animate-scale-in"
+                            className="group relative rounded-xl overflow-hidden ring-1 ring-black/[0.08] dark:ring-white/[0.08] card-glow cursor-pointer w-64 animate-scale-in"
                             onClick={() => setLightbox(img.url)}>
                             <Image src={img.url} alt={img.prompt} width={512} height={512} className="w-full h-auto object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
@@ -989,108 +1090,145 @@ export default function Home() {
 
             {/* ── CREATE TAB ─────────────────────────────────── */}
             {activeTab === "generate" && (
-              <div className="flex-1 flex overflow-hidden animate-fade-in">
-                <aside className="w-[272px] bg-[#111114] border-r border-white/[0.06] flex flex-col gap-5 p-5 overflow-y-auto flex-shrink-0">
-                  <div className="flex flex-col gap-2">
-                    <label className={label}>Pet Photo</label>
-                    {photoPreview ? (
-                      <div className="flex flex-col gap-2 animate-scale-in">
-                        <div className="relative rounded-xl overflow-hidden ring-2 ring-orange-400/50 bg-white flex items-center justify-center w-full transition-all duration-300"
+              <div className="flex-1 flex flex-col overflow-hidden animate-fade-in">
+                <div className="bg-white dark:bg-[#111114] border-b border-black/[0.06] dark:border-white/[0.06] px-6 py-5 overflow-x-auto flex-shrink-0">
+                  <div className="flex flex-wrap items-start gap-6">
+                    <div className="flex flex-col gap-2 w-44 flex-shrink-0">
+                      <label className={label}>Pet Photo</label>
+                      {photoPreview ? (
+                        <div className="relative rounded-xl overflow-hidden ring-2 ring-orange-400/50 bg-white flex items-center justify-center w-full transition-all duration-300 animate-scale-in"
                           style={{ aspectRatio: aspectRatio.replace(":", "/") }}>
                           <img src={photoPreview} alt="Uploaded pet"
                             className="transition-all duration-200"
                             style={{ width: `${photoZoom * 100}%`, height: `${photoZoom * 100}%`, objectFit: "contain" }} />
                           <button onClick={() => { setPhoto(null); setPhotoPreview(null); setPhotoZoom(1); }}
-                            className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-xs px-2 py-1 rounded-lg transition-colors">
+                            className="absolute top-1.5 right-1.5 bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded-md transition-colors">
                             Change
                           </button>
                         </div>
-                        <div className="flex flex-col gap-1.5">
-                          <label className={label}>
-                            Dog Scale — <span className="text-orange-400">{Math.round(photoZoom * 100)}%</span>
-                          </label>
-                          <input type="range" min={20} max={100} value={photoZoom * 100}
-                            onChange={(e) => setPhotoZoom(Number(e.target.value) / 100)}
-                            className="w-full" />
-                          <div className="flex justify-between text-xs text-zinc-600"><span>Zoomed out</span><span>Full size</span></div>
+                      ) : (
+                        <div
+                          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                          onDragLeave={() => setDragging(false)}
+                          onDrop={handleDrop}
+                          onClick={() => fileInputRef.current?.click()}
+                          className={`cursor-pointer flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed h-28 transition-all duration-200 ${
+                            dragging
+                              ? "border-orange-400 bg-orange-400/[0.12] scale-[1.02]"
+                              : "border-black/[0.12] dark:border-white/[0.12] bg-black/[0.02] dark:bg-white/[0.02] hover:border-orange-400/60 hover:bg-orange-400/[0.06]"
+                          }`}
+                        >
+                          <span className={`text-2xl transition-transform duration-200 ${dragging ? "scale-125" : ""}`}>📸</span>
+                          <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Drop or click</p>
                         </div>
-                      </div>
-                    ) : (
-                      <div
-                        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-                        onDragLeave={() => setDragging(false)}
-                        onDrop={handleDrop}
-                        onClick={() => fileInputRef.current?.click()}
-                        className={`cursor-pointer flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 transition-all duration-200 ${
-                          dragging
-                            ? "border-orange-400 bg-orange-400/[0.12] scale-[1.02]"
-                            : "border-white/[0.12] bg-white/[0.02] hover:border-orange-400/60 hover:bg-orange-400/[0.06]"
-                        }`}
-                      >
-                        <span className={`text-3xl transition-transform duration-200 ${dragging ? "scale-125" : ""}`}>📸</span>
-                        <p className="text-sm font-medium text-zinc-300">Drop a photo or click</p>
-                        <p className="text-xs text-zinc-600">JPG, PNG, WEBP</p>
+                      )}
+                      <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
+                        onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFile(file); }} />
+                    </div>
+
+                    {photoPreview && (
+                      <div className="flex flex-col gap-2 w-36 flex-shrink-0">
+                        <label className={label}>
+                          Dog Scale — <span className="text-orange-400">{Math.round(photoZoom * 100)}%</span>
+                        </label>
+                        <input type="range" min={20} max={100} value={photoZoom * 100}
+                          onChange={(e) => setPhotoZoom(Number(e.target.value) / 100)}
+                          className="w-full" />
+                        <div className="flex justify-between text-xs text-zinc-600"><span>Out</span><span>Full</span></div>
                       </div>
                     )}
-                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
-                      onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFile(file); }} />
-                  </div>
 
-                  <div className="flex flex-col gap-2">
-                    <label className={label}>
-                      Prompt <span className="text-zinc-600 normal-case font-normal tracking-normal">(optional)</span>
-                    </label>
-                    <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGenerate(); } }}
-                      placeholder="e.g. wearing a chef hat in a cozy kitchen..."
-                      rows={3} className={inputDark} />
-                    <p className="text-xs text-zinc-600">⌘ + Enter to generate</p>
-                  </div>
-
-                  <ModelSwitcher value={model} onChange={setModel} />
-
-                  <div className="flex flex-col gap-2">
-                    <label className={label}>Aspect Ratio</label>
-                    <div className="flex flex-wrap gap-2">
-                      {ASPECT_RATIOS.map((r) => (
-                        <button key={r.value} onClick={() => setAspectRatio(r.value)}
-                          className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all duration-200 ${
-                            aspectRatio === r.value ? chipOn : chipOff
-                          }`}>
-                          {r.label}
+                    <div className="flex flex-col gap-2 flex-1 min-w-[220px]">
+                      <div className="flex items-center gap-1.5">
+                        <label className={label}>
+                          Prompt <span className="text-zinc-600 normal-case font-normal tracking-normal">(optional)</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowPromptHint((v) => !v)}
+                          title="How does the prompt work?"
+                          className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-200 ${
+                            showPromptHint
+                              ? "bg-orange-500 text-white"
+                              : "bg-black/[0.08] dark:bg-white/[0.1] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+                          }`}
+                        >
+                          ?
                         </button>
-                      ))}
+                      </div>
+                      <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGenerate(); } }}
+                        placeholder="e.g. wearing a chef hat in a cozy kitchen..."
+                        rows={2} className={`${inputDark} resize-none`} />
+                      {showPromptHint ? (
+                        <div className="text-xs text-zinc-600 dark:text-zinc-400 bg-black/[0.03] dark:bg-white/[0.04] border border-black/[0.06] dark:border-white/[0.07] rounded-lg px-3 py-2 animate-fade-in leading-relaxed">
+                          Your text is wrapped in a fixed style template before it&apos;s sent to the model:
+                          <br />
+                          <span className="italic text-zinc-500 dark:text-zinc-500">
+                            &ldquo;Disney Pixar 3D animated style, <span className="text-orange-500 dark:text-orange-400 font-medium not-italic">[your text]</span>, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality&rdquo;
+                          </span>
+                          <br />
+                          Leave it blank and a default Pixar transformation prompt is used instead — no style keywords needed, just describe the scene/outfit/pose you want.
+                        </div>
+                      ) : (
+                        <p className="text-xs text-zinc-600">⌘ + Enter to generate</p>
+                      )}
+                    </div>
+
+                    <div className="w-56 flex-shrink-0">
+                      <ModelSwitcher value={model} onChange={setModel} compact />
+                    </div>
+
+                    <div className="flex flex-col gap-2 flex-shrink-0">
+                      <label className={label}>Aspect Ratio</label>
+                      <div className="flex flex-wrap gap-2 max-w-[220px]">
+                        {ASPECT_RATIOS.map((r) => (
+                          <button key={r.value} onClick={() => setAspectRatio(r.value)}
+                            className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all duration-200 ${
+                              aspectRatio === r.value ? chipOn : chipOff
+                            }`}>
+                            {r.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 w-32 flex-shrink-0">
+                      <label className={label}>
+                        Images — <span className="text-orange-400">{numOutputs}</span>
+                      </label>
+                      <input type="range" min={1} max={4} value={numOutputs}
+                        onChange={(e) => setNumOutputs(Number(e.target.value))}
+                        className="w-full" />
+                      <div className="flex justify-between text-xs text-zinc-600"><span>1</span><span>4</span></div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 flex-shrink-0">
+                      <label className={`${label} opacity-0 select-none`}>Generate</label>
+                      <button onClick={handleGenerate} disabled={loading || !photo}
+                        className="btn-primary px-8 py-3 rounded-xl font-bold text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none flex items-center justify-center gap-2 whitespace-nowrap">
+                        {loading ? (<><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Generating...</>) : <>✨ Generate Pixar Art</>}
+                      </button>
                     </div>
                   </div>
 
-                  <div className="flex flex-col gap-2">
-                    <label className={label}>
-                      Images — <span className="text-orange-400">{numOutputs}</span>
-                    </label>
-                    <input type="range" min={1} max={4} value={numOutputs}
-                      onChange={(e) => setNumOutputs(Number(e.target.value))}
-                      className="w-full" />
-                    <div className="flex justify-between text-xs text-zinc-600"><span>1</span><span>4</span></div>
-                  </div>
-
-                  <button onClick={handleGenerate} disabled={loading || !photo}
-                    className="btn-primary w-full py-3.5 rounded-xl font-bold text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none flex items-center justify-center gap-2">
-                    {loading ? (<><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Generating...</>) : <>✨ Generate Pixar Art</>}
-                  </button>
-
-                  {!photo && <p className="text-xs text-center text-zinc-600">Upload a pet photo to get started</p>}
-                  {error && <div className={errorBox}>{error}</div>}
-                </aside>
+                  {(!photo || error) && (
+                    <div className="flex items-center gap-3 mt-4">
+                      {!photo && <p className="text-xs text-zinc-600">Upload a pet photo to get started</p>}
+                      {error && <div className={errorBox}>{error}</div>}
+                    </div>
+                  )}
+                </div>
 
                 <section className="flex-1 overflow-y-auto p-6">
                   {history.length === 0 && !loading ? (
                     <div className="h-full flex flex-col items-center justify-center gap-4">
                       <div className="text-7xl animate-float">🐾</div>
-                      <p className="text-base font-semibold text-zinc-300">Your Pixar pet portraits will appear here</p>
+                      <p className="text-base font-semibold text-zinc-700 dark:text-zinc-300">Your Pixar pet portraits will appear here</p>
                       <p className="text-sm text-zinc-600">Upload a photo and hit Generate ✨</p>
                     </div>
                   ) : (
-                    <div className="columns-2 md:columns-3 lg:columns-4 gap-4 space-y-4">
+                    <div className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4">
                       {loading && Array.from({ length: numOutputs }).map((_, i) => (
                         <div key={`sk-${i}`} className="break-inside-avoid rounded-xl skeleton" style={{ aspectRatio: aspectRatio.replace(":", "/") }} />
                       ))}
@@ -1118,7 +1256,7 @@ export default function Home() {
               <section className="flex-1 overflow-y-auto p-8 animate-fade-in">
                 <div className="flex items-start justify-between mb-6 gap-4">
                   <div className="animate-slide-in-left">
-                    <h2 className="text-2xl font-bold text-white tracking-tight">Edit</h2>
+                    <h2 className="text-2xl font-bold text-zinc-900 dark:text-white tracking-tight">Edit</h2>
                     <p className="text-sm text-zinc-500 mt-0.5">
                       {history.length} image{history.length !== 1 ? "s" : ""} generated
                     </p>
@@ -1128,7 +1266,7 @@ export default function Home() {
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 text-sm">🔍</span>
                       <input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)}
                         placeholder="Search prompts..."
-                        className="pl-8 pr-4 py-2 text-sm bg-white/[0.04] border border-white/[0.08] rounded-xl text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15 w-52 transition-all duration-200" />
+                        className="pl-8 pr-4 py-2 text-sm bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] rounded-xl text-zinc-900 dark:text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15 w-52 transition-all duration-200" />
                     </div>
                     {history.length > 0 && (
                       <button onClick={() => { if (confirm("Clear all history?")) setHistory([]); }}
@@ -1144,8 +1282,8 @@ export default function Home() {
                     <button onClick={() => setHistoryFilter(null)}
                       className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 ${
                         historyFilter === null
-                          ? "bg-white text-black shadow-lg shadow-white/10"
-                          : "bg-white/[0.04] border border-white/[0.08] text-zinc-400 hover:text-zinc-200 hover:border-white/[0.2]"
+                          ? "bg-zinc-900 text-white shadow-lg shadow-black/10 dark:bg-white dark:text-black dark:shadow-white/10"
+                          : "bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:border-black/[0.2] dark:hover:border-white/[0.2]"
                       }`}>
                       All · {history.length}
                     </button>
@@ -1157,7 +1295,7 @@ export default function Home() {
                           className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 ${
                             historyFilter === m.id
                               ? "bg-orange-500 text-white shadow-lg shadow-orange-500/25"
-                              : "bg-white/[0.04] border border-white/[0.08] text-zinc-400 hover:text-orange-300 hover:border-orange-400/40"
+                              : "bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] text-zinc-600 dark:text-zinc-400 hover:text-orange-300 hover:border-orange-400/40"
                           }`}>
                           {m.name} · {count}
                         </button>
@@ -1169,7 +1307,7 @@ export default function Home() {
                 {filteredHistory.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-32 gap-4">
                     <div className="text-6xl animate-float">🐾</div>
-                    <p className="text-base font-semibold text-zinc-300">
+                    <p className="text-base font-semibold text-zinc-700 dark:text-zinc-300">
                       {history.length === 0 ? "No images yet" : "No results found"}
                     </p>
                     <p className="text-sm text-zinc-600">
@@ -1204,7 +1342,7 @@ export default function Home() {
       {lightbox && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-8 animate-fade-in"
           onClick={() => setLightbox(null)}>
-          <button className="absolute top-4 right-4 text-white/60 hover:text-white text-2xl bg-white/[0.06] hover:bg-white/[0.15] w-10 h-10 rounded-full flex items-center justify-center transition-all"
+          <button className="absolute top-4 right-4 text-white/60 hover:text-white text-2xl bg-black/[0.06] dark:bg-white/[0.06] hover:bg-black/[0.15] dark:hover:bg-white/[0.15] w-10 h-10 rounded-full flex items-center justify-center transition-all"
             onClick={() => setLightbox(null)}>
             ✕
           </button>

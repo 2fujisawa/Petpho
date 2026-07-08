@@ -1,9 +1,15 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 body {
+  background-color: #f7f7f8;
+  color: #18181b;
+  -webkit-font-smoothing: antialiased;
+}
+:where(.dark) body {
   background-color: #0a0a0c;
   color: #e4e4e7;
-  -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
@@ -20,15 +26,21 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.14);
   border-radius: 8px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.24);
   border: 3px solid transparent;
   background-clip: content-box;
+}
+:where(.dark) ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+}
+:where(.dark) ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 /* ── Range sliders ──────────────────────────────────────── */
@@ -37,9 +49,12 @@ input[type="range"] {
   appearance: none;
   height: 4px;
   border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.12);
   outline: none;
   cursor: pointer;
+}
+:where(.dark) input[type="range"] {
+  background: rgba(255, 255, 255, 0.08);
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -136,12 +151,21 @@ input[type="range"]::-moz-range-thumb {
 .skeleton {
   background: linear-gradient(
     90deg,
+    #e8e8ea 25%,
+    #f2f2f4 50%,
+    #e8e8ea 75%
+  );
+  background-size: 1200px 100%;
+  animation: shimmer 1.8s linear infinite;
+}
+:where(.dark) .skeleton {
+  background: linear-gradient(
+    90deg,
     #16161a 25%,
     #202027 50%,
     #16161a 75%
   );
   background-size: 1200px 100%;
-  animation: shimmer 1.8s linear infinite;
 }
 
 /* ── Primary gradient button with shine sweep ───────────── */

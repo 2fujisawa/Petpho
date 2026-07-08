@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm list *)"
+      "Bash(npm list *)",
+      "Bash(rm -f /private/tmp/claude-501/-Users-linusfujisawa-Desktop-Programming-Petpho-petphogen/e0ba5e66-4db0-4115-8de1-c4172fc88ff6/scratchpad/verify_theme*.cjs)"
+    ],
+    "additionalDirectories": [
+      "/private/tmp/claude-501/-Users-linusfujisawa-Desktop-Programming-Petpho-petphogen/e0ba5e66-4db0-4115-8de1-c4172fc88ff6/scratchpad"
     ]
   }
 }

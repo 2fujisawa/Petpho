@@ -57,10 +57,10 @@ function LoginForm() {
           value={password}
           onChange={(e) => { setPassword(e.target.value); setError(""); }}
           placeholder="Enter access password"
-          className={`w-full px-4 py-3 rounded-xl border text-sm text-zinc-100 placeholder-zinc-600 transition-all duration-200 outline-none ${
+          className={`w-full px-4 py-3 rounded-xl border text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-600 transition-all duration-200 outline-none ${
             error
               ? "border-red-500/40 bg-red-500/[0.06] focus:ring-2 focus:ring-red-500/15"
-              : "border-white/[0.08] bg-white/[0.04] focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15"
+              : "border-black/[0.08] dark:border-white/[0.08] bg-black/[0.04] dark:bg-white/[0.04] focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15"
           }`}
           autoComplete="current-password"
         />
@@ -89,15 +89,15 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <main className="min-h-screen bg-[#0a0a0c] flex items-center justify-center p-6">
+    <main className="min-h-screen bg-[#f7f7f8] dark:bg-[#0a0a0c] flex items-center justify-center p-6">
       <div className="w-full max-w-sm animate-scale-in">
-        <div className="bg-[#131316] rounded-3xl ring-1 ring-white/[0.07] shadow-2xl shadow-black/50 p-8">
+        <div className="bg-white dark:bg-[#131316] rounded-3xl ring-1 ring-black/[0.07] dark:ring-white/[0.07] shadow-2xl shadow-black/50 p-8">
           <div className="flex flex-col items-center gap-3 mb-8">
             <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-2xl shadow-lg shadow-orange-500/25 animate-float">
               🐶
             </div>
             <div className="text-center">
-              <h1 className="font-extrabold text-2xl tracking-tight text-white">
+              <h1 className="font-extrabold text-2xl tracking-tight text-zinc-900 dark:text-white">
                 PETPHO <span className="text-orange-400">Gen</span>
               </h1>
               <p className="text-sm text-zinc-500 mt-1">Admin access required</p>
@@ -107,7 +107,7 @@ export default function LoginPage() {
             <LoginForm />
           </Suspense>
         </div>
-        <p className="text-center text-xs text-zinc-700 mt-4">
+        <p className="text-center text-xs text-zinc-400 dark:text-zinc-700 mt-4">
           Petpho Gen · Admin Tool
         </p>
       </div>
