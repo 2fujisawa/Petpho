@@ -36,7 +36,7 @@ function LoginForm() {
         return;
       }
 
-      const next = searchParams.get("next") || "/";
+      const next = searchParams.get("next") || "/studio";
       router.replace(next);
       router.refresh();
     } catch {
