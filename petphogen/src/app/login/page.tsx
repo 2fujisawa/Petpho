@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState, useRef, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -89,16 +90,16 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <main className="min-h-screen bg-[#f7f7f8] dark:bg-[#0a0a0c] flex items-center justify-center p-6">
+    <main className="min-h-screen bg-[#f6f6f7] dark:bg-[#0f0f11] flex items-center justify-center p-6">
       <div className="w-full max-w-sm animate-scale-in">
-        <div className="bg-white dark:bg-[#131316] rounded-3xl ring-1 ring-black/[0.07] dark:ring-white/[0.07] shadow-2xl shadow-black/50 p-8">
+        <div className="bg-white dark:bg-[#19191c] rounded-3xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_48px_rgba(0,0,0,0.09)] dark:shadow-[0_1px_2px_rgba(0,0,0,0.3),0_16px_48px_rgba(0,0,0,0.5)] p-8">
           <div className="flex flex-col items-center gap-3 mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-2xl shadow-lg shadow-orange-500/25 animate-float">
-              🐶
+            <div className="animate-float logo-glow">
+              <Image src="/logo.png" alt="Petpho mascot" width={128} height={128} className="w-28 h-28" priority />
             </div>
             <div className="text-center">
               <h1 className="font-extrabold text-2xl tracking-tight text-zinc-900 dark:text-white">
-                PETPHO <span className="text-orange-400">Gen</span>
+                Petpho <span className="text-orange-400">Gen</span>
               </h1>
               <p className="text-sm text-zinc-500 mt-1">Admin access required</p>
             </div>

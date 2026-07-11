@@ -143,6 +143,15 @@ input[type="range"]::-moz-range-thumb {
   animation: float 3.2s ease-in-out infinite;
 }
 
+/* Warm pulsing glow for the mascot — filter-based so it stacks with float's transform */
+@keyframes logo-glow {
+  0%, 100% { filter: drop-shadow(0 6px 18px rgba(245, 158, 11, 0.22)); }
+  50%      { filter: drop-shadow(0 12px 36px rgba(245, 158, 11, 0.48)); }
+}
+.logo-glow {
+  animation: logo-glow 3.2s ease-in-out infinite;
+}
+
 .animate-glow-pulse {
   animation: glow-pulse 2.4s ease-in-out infinite;
 }

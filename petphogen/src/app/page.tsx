@@ -623,13 +623,12 @@ export default function Home() {
 
       {/* ── Sidebar ──────────────────────────────────────────── */}
       <nav className="w-[212px] flex-shrink-0 flex flex-col bg-white dark:bg-[#141416]">
-        <div className="px-4 pt-6 pb-5 flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-sm shadow-sm shadow-orange-500/20 flex-shrink-0">
-            🐶
-          </div>
+        <div className="px-4 pt-6 pb-5 flex items-center gap-2.5 group/brand">
+          <Image src="/logo.png" alt="Petpho mascot" width={40} height={40}
+            className="w-10 h-10 flex-shrink-0 transition-transform duration-300 group-hover/brand:scale-110 group-hover/brand:-rotate-6" />
           <div className="min-w-0">
             <p className="text-zinc-900 dark:text-white font-bold text-sm tracking-tight leading-tight">Petpho</p>
-            <p className="text-zinc-400 dark:text-zinc-500 text-[11px] font-medium leading-tight">Gen</p>
+            <p className="text-orange-400 text-[11px] font-semibold leading-tight">Gen</p>
           </div>
         </div>
 
@@ -1059,7 +1058,9 @@ export default function Home() {
                 <section className="flex-1 overflow-y-auto px-6 pt-6 pb-44">
                   {history.length === 0 && !loading ? (
                     <div className="h-full flex flex-col items-center justify-center gap-4">
-                      <div className="text-7xl animate-float">🐾</div>
+                      <div className="animate-float logo-glow">
+                        <Image src="/logo.png" alt="Petpho mascot" width={160} height={160} className="w-36 h-36" priority />
+                      </div>
                       <p className="text-base font-semibold text-zinc-700 dark:text-zinc-300">Your Pixar pet portraits will appear here</p>
                       <p className="text-sm text-zinc-600">Upload a photo and hit Generate ✨</p>
                     </div>
@@ -1264,7 +1265,9 @@ export default function Home() {
 
                 {filteredHistory.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-32 gap-4">
-                    <div className="text-6xl animate-float">🐾</div>
+                    <div className="animate-float logo-glow">
+                      <Image src="/logo.png" alt="Petpho mascot" width={120} height={120} className="w-28 h-28" />
+                    </div>
                     <p className="text-base font-semibold text-zinc-700 dark:text-zinc-300">
                       {history.length === 0 ? "No images yet" : "No results found"}
                     </p>
