@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import { getModelConfig, buildImageInput, extractImageUrl, DEFAULT_MODEL } from "@/lib/models";
-import { rehostAll } from "@/lib/storage";
+import { rehostAll, rehostBuffer } from "@/lib/storage";
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
@@ -66,9 +66,11 @@ export async function POST(req: NextRequest) {
   let uploadedBackground: Awaited<ReturnType<typeof replicate.files.create>> | null = null;
 
   try {
-    uploadedFile = await replicate.files.create(
-      new Blob([buffer], { type: mimeType })
-    );
+    const [uploadedFileResult, uploadUrl] = await Promise.all([
+      replicate.files.create(new Blob([buffer], { type: mimeType })),
+      rehostBuffer(buffer, mimeType),
+    ]);
+    uploadedFile = uploadedFileResult;
     const imageUrl = uploadedFile.urls.get;
 
     // Two-image flow: pet photo + uploaded background image
@@ -92,7 +94,7 @@ export async function POST(req: NextRequest) {
       );
       const outputs = await Promise.all(runs);
       const images = await rehostAll(outputs.map(String));
-      return NextResponse.json({ images });
+      return NextResponse.json({ images, uploadUrl });
     }
 
     // Normal single-image flow
@@ -102,7 +104,7 @@ export async function POST(req: NextRequest) {
     const outputs = await Promise.all(runs);
     const images = await rehostAll(outputs.map(extractImageUrl));
 
-    return NextResponse.json({ images });
+    return NextResponse.json({ images, uploadUrl });
   } catch (err) {
     console.error("Replicate error:", err);
     const message =

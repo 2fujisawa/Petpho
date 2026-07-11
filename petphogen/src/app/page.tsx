@@ -3,7 +3,6 @@
 import Image from "next/image";
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
 import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, type ModelId, type ModelConfig } from "@/lib/models";
-import { BACKGROUNDS } from "@/lib/backgrounds";
 import { PREMADE_BACKGROUNDS } from "@/lib/premadeBackgrounds";
 
 const ASPECT_RATIOS = [
@@ -19,20 +18,17 @@ type GeneratedImage = {
   prompt: string;
   model: ModelId;
   sourceUrl?: string;
+  uploadUrl?: string;
   createdAt?: number;
 };
 
 type EditorState = {
   sourceImage: GeneratedImage;
   editPrompt: string;
-  selectedBackground: string | null;
-  numOutputs: number;
-  aspectRatio: string;
-  model: ModelId;
+  aspectRatio: string; // "original" or e.g. "16:9" — non-original outpaints the canvas
   loading: boolean;
   error: string | null;
   results: GeneratedImage[];
-  mode: "text" | "brush";
 };
 
 type InpaintCanvasHandle = {
@@ -100,7 +96,7 @@ const InpaintCanvas = forwardRef<
   }
 
   return (
-    <div className="relative select-none rounded-xl overflow-hidden ring-1 ring-orange-400/40 shadow-2xl shadow-black/40">
+    <div className="relative select-none rounded-2xl overflow-hidden ring-1 ring-orange-400/25">
       <img src={imageUrl} alt="Inpaint target" className="w-full h-auto block" draggable={false}
         onLoad={(e) => { const img = e.currentTarget; initCanvases(img.naturalWidth, img.naturalHeight); }} />
       <canvas ref={displayRef} className="absolute inset-0 w-full h-full cursor-crosshair" style={{ touchAction: "none" }}
@@ -114,10 +110,12 @@ const InpaintCanvas = forwardRef<
 
 const label = "text-[11px] font-semibold text-zinc-500 uppercase tracking-[0.14em]";
 const inputDark =
-  "w-full bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-600 resize-none focus:outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15 transition-all duration-200";
+  "w-full bg-black/[0.035] dark:bg-white/[0.045] border border-transparent rounded-2xl px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-500 resize-none focus:outline-none focus:bg-white dark:focus:bg-white/[0.06] focus:ring-2 focus:ring-orange-400/20 transition-all duration-200";
 const chipOff =
-  "bg-black/[0.03] dark:bg-white/[0.03] border-black/[0.08] dark:border-white/[0.08] text-zinc-600 dark:text-zinc-400 hover:bg-black/[0.07] dark:hover:bg-white/[0.07] hover:text-zinc-800 dark:hover:text-zinc-200 hover:border-black/[0.14] dark:hover:border-white/[0.14]";
-const chipOn = "bg-orange-500 border-orange-500 text-white shadow-lg shadow-orange-500/25";
+  "bg-black/[0.035] dark:bg-white/[0.04] border-transparent text-zinc-600 dark:text-zinc-400 hover:bg-black/[0.06] dark:hover:bg-white/[0.07] hover:text-zinc-800 dark:hover:text-zinc-200";
+const chipOn = "bg-orange-500 border-orange-500 text-white shadow-sm shadow-orange-500/25";
+const floatCard =
+  "bg-white dark:bg-[#19191c] rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_2px_rgba(0,0,0,0.3),0_10px_28px_rgba(0,0,0,0.45)]";
 
 function ModelSwitcher({
   value,
@@ -140,7 +138,7 @@ function ModelSwitcher({
           {models.map((m) => (
             <button key={m.id} onClick={() => onChange(m.id)}
               title={`${m.provider} — ${m.description}`}
-              className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all duration-200 whitespace-nowrap ${
+              className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-all duration-200 whitespace-nowrap ${
                 value === m.id ? chipOn : chipOff
               }`}>
               {m.name}
@@ -157,10 +155,10 @@ function ModelSwitcher({
       <div className="flex flex-col gap-1.5">
         {models.map((m) => (
           <button key={m.id} onClick={() => onChange(m.id)}
-            className={`text-left rounded-xl border px-3 py-2.5 transition-all duration-200 ${
+            className={`text-left rounded-2xl px-3 py-2.5 transition-all duration-200 ${
               value === m.id
-                ? "bg-gradient-to-r from-orange-500 to-amber-500 border-transparent text-white shadow-lg shadow-orange-500/20"
-                : "bg-black/[0.03] dark:bg-white/[0.03] border-black/[0.07] dark:border-white/[0.07] text-zinc-700 dark:text-zinc-300 hover:bg-black/[0.06] dark:hover:bg-white/[0.06] hover:border-black/[0.14] dark:hover:border-white/[0.14]"
+                ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-sm shadow-orange-500/20"
+                : "bg-black/[0.03] dark:bg-white/[0.035] text-zinc-700 dark:text-zinc-300 hover:bg-black/[0.06] dark:hover:bg-white/[0.06]"
             }`}>
             <p className="text-xs font-bold leading-tight">{m.name}</p>
             <p className={`text-xs mt-0.5 leading-tight ${value === m.id ? "text-white/80" : "text-zinc-500"}`}>
@@ -173,30 +171,24 @@ function ModelSwitcher({
   );
 }
 
-function BackgroundPicker({ value, onChange }: { value: string | null; onChange: (id: string | null) => void }) {
+function SlidersIcon() {
   return (
-    <div className="flex flex-col gap-2">
-      <label className={label}>
-        Background <span className="text-zinc-600 normal-case font-normal tracking-normal">(optional)</span>
-      </label>
-      <div className="grid grid-cols-2 gap-2">
-        <button onClick={() => onChange(null)}
-          className={`col-span-2 text-xs px-3 py-2 rounded-xl border font-medium transition-all duration-200 ${
-            value === null ? chipOn : chipOff
-          }`}>
-          ✕ No Background
-        </button>
-        {BACKGROUNDS.map((bg) => (
-          <button key={bg.id} onClick={() => onChange(value === bg.id ? null : bg.id)}
-            className={`flex flex-col rounded-xl overflow-hidden border-2 transition-all duration-200 text-left ${
-              value === bg.id ? "border-orange-400 shadow-lg shadow-orange-500/15" : "border-black/[0.07] dark:border-white/[0.07] hover:border-black/[0.2] dark:hover:border-white/[0.2]"
-            }`}>
-            <div className="h-16 overflow-hidden" style={{ background: bg.gradient }} />
-            <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300 py-1.5 px-2 leading-tight bg-gray-100 dark:bg-[#17171a]">{bg.name}</p>
-          </button>
-        ))}
-      </div>
-    </div>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <line x1="21" y1="4" x2="14" y2="4" /><line x1="10" y1="4" x2="3" y2="4" />
+      <line x1="21" y1="12" x2="12" y2="12" /><line x1="8" y1="12" x2="3" y2="12" />
+      <line x1="21" y1="20" x2="16" y2="20" /><line x1="12" y1="20" x2="3" y2="20" />
+      <line x1="14" y1="2" x2="14" y2="6" /><line x1="8" y1="10" x2="8" y2="14" /><line x1="16" y1="18" x2="16" y2="22" />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <line x1="12" y1="19" x2="12" y2="22" />
+    </svg>
   );
 }
 
@@ -225,7 +217,7 @@ function formatDate(ts?: number) {
 }
 
 function ImageCard({
-  img, index, onOpen, onEdit, onScene, onRemove, isBroken, onBroken, showDate,
+  img, index, onOpen, onEdit, onScene, onRemove, onViewOriginal, isBroken, onBroken, showDate,
 }: {
   img: GeneratedImage;
   index: number;
@@ -233,6 +225,7 @@ function ImageCard({
   onEdit: () => void;
   onScene: () => void;
   onRemove: () => void;
+  onViewOriginal: () => void;
   isBroken: boolean;
   onBroken: () => void;
   showDate?: boolean;
@@ -242,7 +235,7 @@ function ImageCard({
   return (
     <div className="break-inside-avoid animate-fade-up" style={{ animationDelay: `${Math.min(index * 35, 350)}ms` }}>
       <div
-        className={`group relative rounded-xl overflow-hidden bg-white dark:bg-[#131316] ring-1 ring-black/[0.06] dark:ring-white/[0.06] ${
+        className={`group relative rounded-2xl overflow-hidden bg-white dark:bg-[#18181b] ${
           isBroken ? "cursor-default" : "card-glow cursor-pointer"
         }`}
         onClick={() => !isBroken && onOpen()}
@@ -252,7 +245,7 @@ function ImageCard({
             <span className="text-3xl opacity-30">🖼️</span>
             <p className="text-xs text-zinc-500 font-medium">Expired</p>
             <button onClick={(e) => { e.stopPropagation(); onRemove(); }}
-              className="text-xs bg-red-500/15 hover:bg-red-500/30 text-red-400 px-3 py-1 rounded-lg transition-colors font-medium mt-1">
+              className="text-xs bg-red-500/15 hover:bg-red-500/30 text-red-400 px-3 py-1 rounded-full transition-colors font-medium mt-1">
               Remove
             </button>
           </div>
@@ -261,28 +254,34 @@ function ImageCard({
             <div className="overflow-hidden">
               <Image src={img.url} alt={img.prompt} width={512} height={512}
                 className="w-full h-auto object-cover transition-transform duration-500 ease-out group-hover:scale-[1.05]"
-                unoptimized onError={onBroken} />
+                unoptimized onError={onBroken} priority={index === 0} />
             </div>
             {/* Hover overlay */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
+            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
               <p className="text-xs text-white/90 line-clamp-2 font-medium leading-relaxed translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
                 {img.prompt}
               </p>
               <div className="flex gap-1.5 flex-wrap translate-y-2 group-hover:translate-y-0 transition-transform duration-300 delay-[40ms]">
                 <button onClick={(e) => { e.stopPropagation(); onEdit(); }}
-                  className="text-xs bg-orange-500 hover:bg-orange-400 text-white px-2.5 py-1 rounded-lg transition-colors font-semibold">
+                  className="text-xs bg-orange-500/95 hover:bg-orange-400 text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
                   ✏️ Edit
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); onScene(); }}
-                  className="text-xs bg-sky-500 hover:bg-sky-400 text-white px-2.5 py-1 rounded-lg transition-colors font-semibold">
+                  className="text-xs bg-sky-500/95 hover:bg-sky-400 text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
                   🖼️ Scene
                 </button>
+                {img.uploadUrl && (
+                  <button onClick={(e) => { e.stopPropagation(); onViewOriginal(); }}
+                    className="text-xs bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
+                    🐾 Original
+                  </button>
+                )}
                 <a href={img.url} download onClick={(e) => e.stopPropagation()}
-                  className="text-xs bg-white/15 hover:bg-white/30 backdrop-blur-sm text-white px-2.5 py-1 rounded-lg transition-colors">
+                  className="text-xs bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white w-6 h-6 flex items-center justify-center rounded-full transition-colors">
                   ↓
                 </a>
                 <button onClick={(e) => { e.stopPropagation(); onRemove(); }}
-                  className="text-xs bg-red-500/60 hover:bg-red-500 text-white px-2.5 py-1 rounded-lg transition-colors">
+                  className="text-xs bg-red-500/70 hover:bg-red-500 text-white w-6 h-6 flex items-center justify-center rounded-full transition-colors">
                   🗑️
                 </button>
               </div>
@@ -290,17 +289,17 @@ function ImageCard({
             {/* Badges */}
             <div className="absolute top-2 left-2 right-2 flex justify-between items-start pointer-events-none">
               {img.sourceUrl && (
-                <span className="text-[10px] bg-orange-500/90 backdrop-blur-sm text-white px-1.5 py-0.5 rounded-md font-semibold">
+                <span className="text-[10px] bg-orange-500/90 backdrop-blur-sm text-white px-2 py-0.5 rounded-full font-semibold">
                   Edited
                 </span>
               )}
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ml-auto backdrop-blur-sm ${badgeClass}`}>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto backdrop-blur-sm ${badgeClass}`}>
                 {modelName}
               </span>
             </div>
             {showDate && formatDate(img.createdAt) && (
               <div className="absolute bottom-2 right-2 pointer-events-none">
-                <span className="text-[10px] bg-black/50 backdrop-blur-sm text-white/80 px-1.5 py-0.5 rounded-md font-medium">
+                <span className="text-[10px] bg-black/50 backdrop-blur-sm text-white/80 px-2 py-0.5 rounded-full font-medium">
                   {formatDate(img.createdAt)}
                 </span>
               </div>
@@ -336,7 +335,9 @@ export default function Home() {
   const [historySearch, setHistorySearch] = useState("");
   const [historyFilter, setHistoryFilter] = useState<ModelId | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [showPromptHint, setShowPromptHint] = useState(false);
+  const [showGenSettings, setShowGenSettings] = useState(false);
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<{ stop: () => void } | null>(null);
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [numOutputs, setNumOutputs] = useState(1);
   const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
@@ -393,7 +394,10 @@ export default function Home() {
       const res = await fetch("/api/inpaint", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageUrl: editor.sourceImage.url, maskDataUrl, prompt: editor.editPrompt }),
+        body: JSON.stringify({
+          imageUrl: editor.sourceImage.url, maskDataUrl, prompt: editor.editPrompt,
+          aspectRatio: editor.aspectRatio === "original" ? undefined : editor.aspectRatio,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Inpaint failed");
@@ -406,6 +410,38 @@ export default function Home() {
       const msg = err instanceof Error ? err.message : "Something went wrong";
       setEditor((e) => e && { ...e, error: msg, loading: false });
     }
+  }
+
+  function toggleDictation(onText: (text: string) => void, onUnsupported: () => void) {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    type Recognition = {
+      lang: string; interimResults: boolean; continuous: boolean;
+      onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+      onend: (() => void) | null; onerror: (() => void) | null;
+      start: () => void; stop: () => void;
+    };
+    const w = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
+    const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    if (!SR) {
+      onUnsupported();
+      return;
+    }
+    const rec = new SR();
+    rec.lang = navigator.language || "en-US";
+    rec.interimResults = false;
+    rec.continuous = false;
+    rec.onresult = (e) => {
+      const text = Array.from(e.results, (r) => r[0].transcript).join(" ").trim();
+      if (text) onText(text);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recognitionRef.current = rec;
+    setListening(true);
+    rec.start();
   }
 
   function handleFile(file: File) {
@@ -495,8 +531,9 @@ export default function Home() {
       if (!res.ok) throw new Error(data.error || "Generation failed");
 
       const now = Date.now();
+      const uploadUrl = data.uploadUrl as string | undefined;
       const newImages: GeneratedImage[] = (data.images as string[]).map((url) => ({
-        url, prompt: prompt || "Pixar style", model, createdAt: now,
+        url, prompt: prompt || "Pixar style", model, createdAt: now, uploadUrl,
       }));
       setHistory((prev) => [...newImages, ...prev]);
     } catch (err) {
@@ -508,9 +545,8 @@ export default function Home() {
 
   function openEditor(img: GeneratedImage) {
     setEditor({
-      sourceImage: img, editPrompt: "", selectedBackground: null,
-      numOutputs: 1, aspectRatio: "1:1", model: img.model,
-      loading: false, error: null, results: [], mode: "text",
+      sourceImage: img, editPrompt: "", aspectRatio: "original",
+      loading: false, error: null, results: [],
     });
   }
 
@@ -550,39 +586,6 @@ export default function Home() {
     }
   }
 
-  async function handleApplyEdit() {
-    if (!editor || (!editor.editPrompt.trim() && !editor.selectedBackground)) return;
-    setEditor((e) => e && { ...e, loading: true, error: null });
-    try {
-      const bgConfig = editor.selectedBackground
-        ? (BACKGROUNDS.find((b) => b.id === editor.selectedBackground) ?? null)
-        : null;
-      const combinedPrompt = [
-        editor.editPrompt.trim(),
-        bgConfig ? `set the background to ${bgConfig.description}` : null,
-      ].filter(Boolean).join(", also ");
-
-      const res = await fetch("/api/edit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageUrl: editor.sourceImage.url, editPrompt: combinedPrompt,
-          aspectRatio: editor.aspectRatio, numOutputs: editor.numOutputs, model: editor.model,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Edit failed");
-      const newImages: GeneratedImage[] = (data.images as string[]).map((url) => ({
-        url, prompt: editor.editPrompt, model: editor.model, sourceUrl: editor.sourceImage.url,
-      }));
-      setHistory((prev) => [...newImages, ...prev]);
-      setEditor((e) => e && { ...e, results: [...newImages, ...e.results], loading: false });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Something went wrong";
-      setEditor((e) => e && { ...e, error: msg, loading: false });
-    }
-  }
-
   const filteredHistory = history.filter((img) => {
     const matchSearch = !historySearch || img.prompt.toLowerCase().includes(historySearch.toLowerCase());
     const matchFilter = !historyFilter || img.model === historyFilter;
@@ -606,28 +609,31 @@ export default function Home() {
 
   function removeFromHistory(url: string) {
     setHistory((h) => h.filter((x) => x.url !== url));
+    fetch("/api/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }).catch(() => {});
   }
 
   const errorBox = "text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2 animate-fade-in";
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f7f7f8] dark:bg-[#0a0a0c] text-zinc-800 dark:text-zinc-200">
+    <div className="flex h-screen overflow-hidden bg-[#f6f6f7] dark:bg-[#0f0f11] text-zinc-800 dark:text-zinc-200">
 
       {/* ── Sidebar ──────────────────────────────────────────── */}
-      <nav className="w-[200px] flex-shrink-0 flex flex-col bg-white dark:bg-[#101012] border-r border-black/[0.05] dark:border-white/[0.05]">
-        <div className="px-4 pt-5 pb-4 flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-base shadow-lg shadow-orange-500/25 flex-shrink-0">
+      <nav className="w-[212px] flex-shrink-0 flex flex-col bg-white dark:bg-[#141416]">
+        <div className="px-4 pt-6 pb-5 flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-sm shadow-sm shadow-orange-500/20 flex-shrink-0">
             🐶
           </div>
           <div className="min-w-0">
-            <p className="text-zinc-900 dark:text-white font-extrabold text-sm tracking-tight leading-tight">PETPHO</p>
-            <p className="text-orange-400 text-[11px] font-semibold leading-tight">Gen</p>
+            <p className="text-zinc-900 dark:text-white font-bold text-sm tracking-tight leading-tight">Petpho</p>
+            <p className="text-zinc-400 dark:text-zinc-500 text-[11px] font-medium leading-tight">Gen</p>
           </div>
         </div>
 
-        <div className="mx-3 h-px bg-black/[0.05] dark:bg-white/[0.05] mb-3" />
-
-        <div className="px-2 flex flex-col gap-1">
+        <div className="px-3 flex flex-col gap-0.5">
           {([
             { id: "generate" as const, icon: "✨", name: "Create" },
             { id: "history" as const, icon: "🎨", name: "Edit" },
@@ -637,22 +643,19 @@ export default function Home() {
               <button
                 key={item.id}
                 onClick={() => navTo(item.id)}
-                className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-xl w-full text-left transition-all duration-200 ${
+                className={`group flex items-center gap-3 px-3 py-2 rounded-xl w-full text-left transition-all duration-200 ${
                   active
-                    ? "bg-black/[0.08] dark:bg-white/[0.08] text-zinc-900 dark:text-white"
-                    : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.04] dark:hover:bg-white/[0.04]"
+                    ? "bg-black/[0.055] dark:bg-white/[0.07] text-zinc-900 dark:text-white"
+                    : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
                 }`}
               >
-                {active && (
-                  <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-gradient-to-b from-orange-400 to-amber-500 animate-slide-in-left" />
-                )}
-                <span className="text-base leading-none transition-transform duration-200 group-hover:scale-110">
+                <span className="text-[15px] leading-none transition-transform duration-200 group-hover:scale-110">
                   {item.icon}
                 </span>
-                <span className="text-sm font-medium flex-1">{item.name}</span>
+                <span className="text-[13px] font-medium flex-1">{item.name}</span>
                 {item.id === "history" && history.length > 0 && (
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold transition-colors duration-200 ${
-                    active ? "bg-orange-400/20 text-orange-300" : "bg-black/[0.06] dark:bg-white/[0.06] text-zinc-600"
+                    active ? "bg-orange-400/15 text-orange-500 dark:text-orange-300" : "bg-black/[0.05] dark:bg-white/[0.06] text-zinc-500"
                   }`}>
                     {history.length}
                   </span>
@@ -664,19 +667,19 @@ export default function Home() {
 
         <div className="flex-1" />
 
-        <div className="px-2 pb-2">
+        <div className="px-3 pb-2">
           <button
             onClick={toggleTheme}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl w-full text-left text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.04] dark:hover:bg-white/[0.04] transition-all duration-200"
+            className="flex items-center gap-3 px-3 py-2 rounded-xl w-full text-left text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-all duration-200"
           >
-            <span className="text-base leading-none">{isDark ? "🌙" : "☀️"}</span>
-            <span className="text-sm font-medium">{isDark ? "Dark" : "Light"}</span>
+            <span className="text-[15px] leading-none">{isDark ? "🌙" : "☀️"}</span>
+            <span className="text-[13px] font-medium">{isDark ? "Dark" : "Light"}</span>
           </button>
         </div>
 
-        <div className="px-4 py-4 border-t border-black/[0.05] dark:border-white/[0.05] flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-[10px] text-zinc-600 font-semibold uppercase tracking-[0.14em]">Admin</span>
+        <div className="px-4 py-3.5 flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-semibold uppercase tracking-[0.14em]">Admin</span>
         </div>
       </nav>
 
@@ -686,11 +689,11 @@ export default function Home() {
         {/* COMPOSE VIEW */}
         {composeTarget && (
           <div className="flex-1 flex overflow-hidden animate-fade-in">
-            <aside className="w-[300px] bg-white dark:bg-[#111114] border-r border-black/[0.06] dark:border-white/[0.06] flex flex-col gap-5 p-5 overflow-y-auto flex-shrink-0">
+            <aside className={`w-[300px] ${floatCard} flex flex-col gap-5 p-5 overflow-y-auto flex-shrink-0 m-6 mr-3`}>
               <div className="flex items-center gap-3 pb-1">
                 <button
                   onClick={() => { setComposeTarget(null); setBackgroundPhoto(null); setBackgroundPhotoPreview(null); setSelectedPremadeBg(null); setBgAspect(null); setComposeError(null); }}
-                  className="w-7 h-7 rounded-lg bg-black/[0.05] dark:bg-white/[0.05] hover:bg-black/[0.12] dark:hover:bg-white/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center text-sm"
+                  className="w-7 h-7 rounded-full bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.1] dark:hover:bg-white/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center text-sm"
                 >
                   ←
                 </button>
@@ -699,7 +702,7 @@ export default function Home() {
 
               <div className="flex flex-col gap-2">
                 <label className={label}>Your Pixar Pet</label>
-                <div className="rounded-xl overflow-hidden ring-1 ring-black/[0.1] dark:ring-white/[0.1]">
+                <div className="rounded-2xl overflow-hidden ring-1 ring-black/[0.08] dark:ring-white/[0.1]">
                   <img src={composeTarget.url} alt="Pixar pet" className="w-full h-40 object-cover" />
                 </div>
               </div>
@@ -707,7 +710,7 @@ export default function Home() {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <label className={label}>Background Photo</label>
-                  <div className="flex rounded-lg bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.07] dark:border-white/[0.07] p-0.5 text-[11px] font-semibold">
+                  <div className="flex rounded-full bg-black/[0.035] dark:bg-white/[0.04] p-0.5 text-[11px] font-semibold">
                     <button onClick={() => setBgSourceTab("premade")}
                       className={`px-2.5 py-1 rounded-md transition-all duration-200 ${
                         bgSourceTab === "premade" ? "bg-sky-500 text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -792,14 +795,14 @@ export default function Home() {
                 <label className={label}>Output Aspect Ratio</label>
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => setComposeAspectRatio("auto")}
-                    className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all duration-200 ${
+                    className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-all duration-200 ${
                       composeAspectRatio === "auto" ? chipOn : chipOff
                     }`}>
                     Auto
                   </button>
                   {ASPECT_RATIOS.map((r) => (
                     <button key={r.value} onClick={() => setComposeAspectRatio(r.value)}
-                      className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all duration-200 ${
+                      className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-all duration-200 ${
                         composeAspectRatio === r.value ? chipOn : chipOff
                       }`}>
                       {r.label}
@@ -897,190 +900,152 @@ export default function Home() {
         {/* EDITOR VIEW */}
         {!composeTarget && editor && (
           <div className="flex-1 flex overflow-hidden animate-fade-in">
-            <div className="flex flex-col w-[280px] bg-white dark:bg-[#111114] border-r border-black/[0.06] dark:border-white/[0.06] p-5 gap-4 overflow-y-auto flex-shrink-0">
+
+            {/* Left panel: source + results */}
+            <div className={`flex flex-col w-[236px] ${floatCard} p-4 gap-4 overflow-y-auto flex-shrink-0 my-6 ml-6`}>
               <div className="flex items-center gap-3 pb-1">
                 <button onClick={() => setEditor(null)}
-                  className="w-7 h-7 rounded-lg bg-black/[0.05] dark:bg-white/[0.05] hover:bg-black/[0.12] dark:hover:bg-white/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center text-sm">
+                  className="w-7 h-7 rounded-full bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.1] dark:hover:bg-white/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center text-sm">
                   ←
                 </button>
-                <span className="font-bold text-zinc-900 dark:text-white text-sm">Image Editor</span>
+                <span className="font-bold text-zinc-900 dark:text-white text-sm">Editor</span>
               </div>
 
-              <div className="rounded-xl overflow-hidden ring-1 ring-orange-400/40 shadow-lg shadow-black/30">
-                <Image src={editor.sourceImage.url} alt="Source" width={320} height={320} className="w-full h-auto object-cover" unoptimized />
-              </div>
-              <p className="text-xs text-zinc-500 italic line-clamp-2">&ldquo;{editor.sourceImage.prompt}&rdquo;</p>
-
-              {/* Mode switcher */}
-              <div className="flex rounded-xl bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.07] dark:border-white/[0.07] p-1 text-xs font-bold">
-                {(["text", "brush"] as const).map((m) => (
-                  <button key={m} onClick={() => setEditor((e) => e && { ...e, mode: m })}
-                    className={`flex-1 py-2 rounded-lg transition-all duration-200 ${
-                      editor.mode === m
-                        ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-md shadow-orange-500/20"
-                        : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-                    }`}>
-                    {m === "text" ? "✏️ Text" : "🖌️ Brush"}
-                  </button>
-                ))}
+              <div className="flex flex-col gap-2">
+                <label className={label}>Source</label>
+                <div className="rounded-2xl overflow-hidden ring-1 ring-orange-400/30">
+                  <Image src={editor.sourceImage.url} alt="Source" width={320} height={320} className="w-full h-auto object-cover" unoptimized />
+                </div>
+                <p className="text-xs text-zinc-500 italic line-clamp-2">&ldquo;{editor.sourceImage.prompt}&rdquo;</p>
               </div>
 
-              <div className="border-t border-black/[0.06] dark:border-white/[0.06] pt-4 flex flex-col gap-4">
-                {editor.mode === "text" ? (
-                  <>
-                    <div className="flex flex-col gap-2">
-                      <label className={label}>Edit Prompt</label>
-                      <textarea value={editor.editPrompt}
-                        onChange={(e) => setEditor((ed) => ed && { ...ed, editPrompt: e.target.value })}
-                        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleApplyEdit(); } }}
-                        placeholder="Add a party hat, change background to beach..."
-                        rows={4} className={inputDark} />
-                      <p className="text-xs text-zinc-600">⌘ + Enter to apply</p>
-                    </div>
-                    <ModelSwitcher value={editor.model} onChange={(id) => setEditor((ed) => ed && { ...ed, model: id })} />
-                    <BackgroundPicker value={editor.selectedBackground} onChange={(id) => setEditor((ed) => ed && { ...ed, selectedBackground: id })} />
-                    <div className="flex flex-col gap-2">
-                      <label className={label}>Aspect Ratio</label>
-                      <div className="flex flex-wrap gap-2">
-                        {ASPECT_RATIOS.map((r) => (
-                          <button key={r.value} onClick={() => setEditor((ed) => ed && { ...ed, aspectRatio: r.value })}
-                            className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all duration-200 ${
-                              editor.aspectRatio === r.value ? chipOn : chipOff
-                            }`}>
-                            {r.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <label className={label}>
-                        Variants — <span className="text-orange-400">{editor.numOutputs}</span>
-                      </label>
-                      <input type="range" min={1} max={4} value={editor.numOutputs}
-                        onChange={(e) => setEditor((ed) => ed && { ...ed, numOutputs: Number(e.target.value) })}
-                        className="w-full" />
-                      <div className="flex justify-between text-xs text-zinc-600"><span>1</span><span>4</span></div>
-                    </div>
-                    <button onClick={handleApplyEdit} disabled={editor.loading || (!editor.editPrompt.trim() && !editor.selectedBackground)}
-                      className="btn-primary w-full py-3 rounded-xl font-bold text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                      {editor.loading ? (<><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Applying...</>) : <>✏️ Apply Edit</>}
-                    </button>
-                  </>
+              <div className="border-t border-black/[0.05] dark:border-white/[0.06] pt-4 flex flex-col gap-2">
+                <label className={label}>Results{editor.results.length > 0 ? ` — ${editor.results.length}` : ""}</label>
+                {editor.loading && <div className="rounded-2xl skeleton w-full" style={{ aspectRatio: "1/1" }} />}
+                {editor.results.length === 0 && !editor.loading ? (
+                  <p className="text-xs text-zinc-500 leading-relaxed">Brush over the image, describe the change, and results appear here</p>
                 ) : (
-                  <>
-                    <div className="flex flex-col gap-2">
-                      <label className={label}>
-                        Zoom — <span className="text-orange-400">{Math.round(canvasZoom * 100)}%</span>
-                      </label>
-                      <input type="range" min={50} max={300} step={10} value={canvasZoom * 100} onChange={(e) => setCanvasZoom(Number(e.target.value) / 100)} className="w-full" />
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <label className={label}>
-                        Brush — <span className="text-orange-400">{brushSize}px</span>
-                      </label>
-                      <input type="range" min={5} max={80} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-full" />
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setBrushTool("brush")}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all duration-200 ${brushTool === "brush" ? chipOn : chipOff}`}>
-                        🖌️ Brush
-                      </button>
-                      <button onClick={() => setBrushTool("eraser")}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all duration-200 ${brushTool === "eraser" ? chipOn : chipOff}`}>
-                        ⬜ Eraser
-                      </button>
-                      <button onClick={() => inpaintCanvasRef.current?.clear()}
-                        className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all duration-200 ${chipOff}`}>
-                        Clear
-                      </button>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <label className={label}>What to Change</label>
-                      <textarea value={editor.editPrompt}
-                        onChange={(e) => setEditor((ed) => ed && { ...ed, editPrompt: e.target.value })}
-                        placeholder="Describe what to put in the brushed area..."
-                        rows={3} className={inputDark} />
-                    </div>
-                    <button onClick={handleApplyInpaint} disabled={editor.loading || !editor.editPrompt.trim()}
-                      className="btn-primary w-full py-3 rounded-xl font-bold text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                      {editor.loading ? (<><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Inpainting...</>) : <>🖌️ Apply Inpaint</>}
-                    </button>
-                  </>
+                  <div className="flex flex-col gap-3">
+                    {editor.results.map((img, i) => (
+                      <div key={`${img.url}-${i}`}
+                        className="group relative rounded-2xl overflow-hidden bg-white dark:bg-[#18181b] card-glow cursor-pointer animate-scale-in"
+                        onClick={() => setLightbox(img.url)}>
+                        <Image src={img.url} alt={img.prompt} width={512} height={512} className="w-full h-auto object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-2.5 gap-1.5">
+                          <div className="flex gap-1.5 flex-wrap">
+                            <button onClick={(e) => { e.stopPropagation(); openEditor(img); }} className="text-[11px] bg-orange-500/95 hover:bg-orange-400 text-white px-2 py-0.5 rounded-full transition-colors font-medium">Edit this</button>
+                            <a href={img.url} download onClick={(e) => e.stopPropagation()} className="text-[11px] bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white px-2 py-0.5 rounded-full transition-colors">↓</a>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
-                {editor.error && <div className={errorBox}>{editor.error}</div>}
               </div>
             </div>
 
-            <section className="flex-1 overflow-y-auto p-6">
-              {editor.mode === "brush" ? (
-                <div className="flex flex-col gap-6">
-                  <div className="overflow-auto">
-                    <div style={{ transform: `scale(${canvasZoom})`, transformOrigin: "top left", display: "inline-block", width: `${100 / canvasZoom}%` }}>
-                      <InpaintCanvas key={editor.sourceImage.url} ref={inpaintCanvasRef} imageUrl={editor.sourceImage.url} brushSize={brushSize} tool={brushTool} />
-                    </div>
+            {/* Center: canvas + floating edit bar */}
+            <div className="flex-1 relative overflow-hidden flex flex-col">
+              <section className="flex-1 overflow-auto p-6 pb-36">
+                <div className={`${floatCard} p-4 w-fit max-w-full mx-auto overflow-auto`}>
+                  <div style={{ transform: `scale(${canvasZoom})`, transformOrigin: "top left", display: "inline-block" }}>
+                    <InpaintCanvas key={editor.sourceImage.url} ref={inpaintCanvasRef} imageUrl={editor.sourceImage.url} brushSize={brushSize} tool={brushTool} />
                   </div>
-                  {editor.loading && <div className="rounded-xl skeleton" style={{ aspectRatio: "1/1", maxWidth: 420 }} />}
-                  {editor.results.length > 0 && (
-                    <div>
-                      <p className={`${label} mb-3 block`}>Inpaint Results</p>
-                      <div className="flex flex-wrap gap-3">
-                        {editor.results.map((img, i) => (
-                          <div key={`${img.url}-${i}`}
-                            className="group relative rounded-xl overflow-hidden ring-1 ring-black/[0.08] dark:ring-white/[0.08] card-glow cursor-pointer w-64 animate-scale-in"
-                            onClick={() => setLightbox(img.url)}>
-                            <Image src={img.url} alt={img.prompt} width={512} height={512} className="w-full h-auto object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
-                              <p className="text-xs text-white/90 line-clamp-2 font-medium">{img.prompt}</p>
-                              <div className="flex gap-2">
-                                <button onClick={(e) => { e.stopPropagation(); openEditor(img); }} className="text-xs bg-orange-500 hover:bg-orange-400 text-white px-2 py-1 rounded-lg transition-colors font-medium">Edit this</button>
-                                <a href={img.url} download onClick={(e) => e.stopPropagation()} className="text-xs bg-white/15 hover:bg-white/30 text-white px-2 py-1 rounded-lg transition-colors">Download</a>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
-              ) : editor.results.length === 0 && !editor.loading ? (
-                <div className="h-full flex flex-col items-center justify-center gap-4 text-zinc-600">
-                  <div className="text-6xl animate-float">✏️</div>
-                  <p className="text-base font-medium text-zinc-600 dark:text-zinc-400">Describe your edit and hit Apply</p>
-                  <p className="text-sm text-zinc-600">Each edit builds on the source image</p>
+              </section>
+
+              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-[min(540px,calc(100%-3rem))] z-30 flex flex-col gap-3">
+                {editor.error && (
+                  <div className="flex justify-center"><div className={errorBox}>{editor.error}</div></div>
+                )}
+                <div className={`${floatCard} !rounded-[26px] p-2 pl-4 flex items-center gap-2`}>
+                  <textarea value={editor.editPrompt}
+                    onChange={(e) => setEditor((ed) => ed && { ...ed, editPrompt: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleApplyInpaint(); } }}
+                    placeholder="Describe what to put in the brushed area…"
+                    rows={1}
+                    className="flex-1 bg-transparent text-sm py-2.5 resize-none focus:outline-none placeholder-zinc-500 text-zinc-900 dark:text-zinc-100" />
+                  <button
+                    type="button"
+                    onClick={() => toggleDictation(
+                      (t) => setEditor((ed) => ed && { ...ed, editPrompt: ed.editPrompt ? `${ed.editPrompt} ${t}` : t }),
+                      () => setEditor((ed) => ed && { ...ed, error: "Voice input isn't supported in this browser — try Chrome" }),
+                    )}
+                    title={listening ? "Stop listening" : "Dictate your edit"}
+                    className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-200 ${
+                      listening
+                        ? "bg-red-500 text-white animate-pulse"
+                        : "bg-black/[0.04] dark:bg-white/[0.06] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+                    }`}>
+                    <MicIcon />
+                  </button>
+                  <button onClick={handleApplyInpaint} disabled={editor.loading || !editor.editPrompt.trim()} title="Apply Inpaint"
+                    className="btn-primary w-10 h-10 rounded-full font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none flex items-center justify-center flex-shrink-0">
+                    {editor.loading
+                      ? <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                      : <span className="text-base leading-none">🖌️</span>}
+                  </button>
                 </div>
-              ) : (
-                <div className="flex flex-col gap-6">
-                  {editor.loading && (
-                    <div className="flex gap-3">
-                      {Array.from({ length: editor.numOutputs }).map((_, i) => (
-                        <div key={`sk-${i}`} className="flex-1 rounded-xl skeleton" style={{ aspectRatio: editor.aspectRatio.replace(":", "/") }} />
-                      ))}
-                    </div>
-                  )}
-                  {editor.results.length > 0 && (
-                    <div>
-                      <p className={`${label} mb-3 block`}>Edit Results</p>
-                      <div className="flex flex-wrap gap-3">
-                        {editor.results.map((img, i) => (
-                          <div key={`${img.url}-${i}`}
-                            className="group relative rounded-xl overflow-hidden ring-1 ring-black/[0.08] dark:ring-white/[0.08] card-glow cursor-pointer w-64 animate-scale-in"
-                            onClick={() => setLightbox(img.url)}>
-                            <Image src={img.url} alt={img.prompt} width={512} height={512} className="w-full h-auto object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
-                              <p className="text-xs text-white/90 line-clamp-2 font-medium">{img.prompt}</p>
-                              <div className="flex gap-2">
-                                <button onClick={(e) => { e.stopPropagation(); openEditor(img); }} className="text-xs bg-orange-500 hover:bg-orange-400 text-white px-2 py-1 rounded-lg transition-colors font-medium">Edit this</button>
-                                <a href={img.url} download onClick={(e) => e.stopPropagation()} className="text-xs bg-white/15 hover:bg-white/30 text-white px-2 py-1 rounded-lg transition-colors">Download</a>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+              </div>
+            </div>
+
+            {/* Right panel: settings */}
+            <div className={`flex flex-col w-[236px] ${floatCard} p-4 gap-5 overflow-y-auto flex-shrink-0 my-6 mr-6`}>
+              <div className="flex flex-col gap-2">
+                <label className={label}>Tool</label>
+                <div className="flex gap-2">
+                  <button onClick={() => setBrushTool("brush")}
+                    className={`flex-1 py-2 rounded-full text-xs font-bold border transition-all duration-200 ${brushTool === "brush" ? chipOn : chipOff}`}>
+                    🖌️ Brush
+                  </button>
+                  <button onClick={() => setBrushTool("eraser")}
+                    className={`flex-1 py-2 rounded-full text-xs font-bold border transition-all duration-200 ${brushTool === "eraser" ? chipOn : chipOff}`}>
+                    ⬜ Eraser
+                  </button>
                 </div>
-              )}
-            </section>
+                <button onClick={() => inpaintCanvasRef.current?.clear()}
+                  className={`w-full py-2 rounded-full text-xs font-bold border transition-all duration-200 ${chipOff}`}>
+                  Clear Mask
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className={label}>
+                  Brush Size — <span className="text-orange-400">{brushSize}px</span>
+                </label>
+                <input type="range" min={5} max={80} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-full" />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className={label}>
+                  Zoom — <span className="text-orange-400">{Math.round(canvasZoom * 100)}%</span>
+                </label>
+                <input type="range" min={50} max={300} step={10} value={canvasZoom * 100} onChange={(e) => setCanvasZoom(Number(e.target.value) / 100)} className="w-full" />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className={label}>Output Size</label>
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={() => setEditor((ed) => ed && { ...ed, aspectRatio: "original" })}
+                    className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-all duration-200 ${
+                      editor.aspectRatio === "original" ? chipOn : chipOff
+                    }`}>
+                    Original
+                  </button>
+                  {ASPECT_RATIOS.map((r) => (
+                    <button key={r.value} onClick={() => setEditor((ed) => ed && { ...ed, aspectRatio: r.value })}
+                      className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-all duration-200 ${
+                        editor.aspectRatio === r.value ? chipOn : chipOff
+                      }`}>
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+                {editor.aspectRatio !== "original" && (
+                  <p className="text-[11px] text-zinc-500 leading-snug">Canvas expands to {editor.aspectRatio} — the new area is AI-filled to match the scene</p>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -1090,137 +1055,8 @@ export default function Home() {
 
             {/* ── CREATE TAB ─────────────────────────────────── */}
             {activeTab === "generate" && (
-              <div className="flex-1 flex flex-col overflow-hidden animate-fade-in">
-                <div className="bg-white dark:bg-[#111114] border-b border-black/[0.06] dark:border-white/[0.06] px-6 py-5 overflow-x-auto flex-shrink-0">
-                  <div className="flex flex-wrap items-start gap-6">
-                    <div className="flex flex-col gap-2 w-44 flex-shrink-0">
-                      <label className={label}>Pet Photo</label>
-                      {photoPreview ? (
-                        <div className="relative rounded-xl overflow-hidden ring-2 ring-orange-400/50 bg-white flex items-center justify-center w-full transition-all duration-300 animate-scale-in"
-                          style={{ aspectRatio: aspectRatio.replace(":", "/") }}>
-                          <img src={photoPreview} alt="Uploaded pet"
-                            className="transition-all duration-200"
-                            style={{ width: `${photoZoom * 100}%`, height: `${photoZoom * 100}%`, objectFit: "contain" }} />
-                          <button onClick={() => { setPhoto(null); setPhotoPreview(null); setPhotoZoom(1); }}
-                            className="absolute top-1.5 right-1.5 bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded-md transition-colors">
-                            Change
-                          </button>
-                        </div>
-                      ) : (
-                        <div
-                          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-                          onDragLeave={() => setDragging(false)}
-                          onDrop={handleDrop}
-                          onClick={() => fileInputRef.current?.click()}
-                          className={`cursor-pointer flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed h-28 transition-all duration-200 ${
-                            dragging
-                              ? "border-orange-400 bg-orange-400/[0.12] scale-[1.02]"
-                              : "border-black/[0.12] dark:border-white/[0.12] bg-black/[0.02] dark:bg-white/[0.02] hover:border-orange-400/60 hover:bg-orange-400/[0.06]"
-                          }`}
-                        >
-                          <span className={`text-2xl transition-transform duration-200 ${dragging ? "scale-125" : ""}`}>📸</span>
-                          <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Drop or click</p>
-                        </div>
-                      )}
-                      <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
-                        onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFile(file); }} />
-                    </div>
-
-                    {photoPreview && (
-                      <div className="flex flex-col gap-2 w-36 flex-shrink-0">
-                        <label className={label}>
-                          Dog Scale — <span className="text-orange-400">{Math.round(photoZoom * 100)}%</span>
-                        </label>
-                        <input type="range" min={20} max={100} value={photoZoom * 100}
-                          onChange={(e) => setPhotoZoom(Number(e.target.value) / 100)}
-                          className="w-full" />
-                        <div className="flex justify-between text-xs text-zinc-600"><span>Out</span><span>Full</span></div>
-                      </div>
-                    )}
-
-                    <div className="flex flex-col gap-2 flex-1 min-w-[220px]">
-                      <div className="flex items-center gap-1.5">
-                        <label className={label}>
-                          Prompt <span className="text-zinc-600 normal-case font-normal tracking-normal">(optional)</span>
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => setShowPromptHint((v) => !v)}
-                          title="How does the prompt work?"
-                          className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-200 ${
-                            showPromptHint
-                              ? "bg-orange-500 text-white"
-                              : "bg-black/[0.08] dark:bg-white/[0.1] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-                          }`}
-                        >
-                          ?
-                        </button>
-                      </div>
-                      <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGenerate(); } }}
-                        placeholder="e.g. wearing a chef hat in a cozy kitchen..."
-                        rows={2} className={`${inputDark} resize-none`} />
-                      {showPromptHint ? (
-                        <div className="text-xs text-zinc-600 dark:text-zinc-400 bg-black/[0.03] dark:bg-white/[0.04] border border-black/[0.06] dark:border-white/[0.07] rounded-lg px-3 py-2 animate-fade-in leading-relaxed">
-                          Your text is wrapped in a fixed style template before it&apos;s sent to the model:
-                          <br />
-                          <span className="italic text-zinc-500 dark:text-zinc-500">
-                            &ldquo;Disney Pixar 3D animated style, <span className="text-orange-500 dark:text-orange-400 font-medium not-italic">[your text]</span>, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality&rdquo;
-                          </span>
-                          <br />
-                          Leave it blank and a default Pixar transformation prompt is used instead — no style keywords needed, just describe the scene/outfit/pose you want.
-                        </div>
-                      ) : (
-                        <p className="text-xs text-zinc-600">⌘ + Enter to generate</p>
-                      )}
-                    </div>
-
-                    <div className="w-56 flex-shrink-0">
-                      <ModelSwitcher value={model} onChange={setModel} compact />
-                    </div>
-
-                    <div className="flex flex-col gap-2 flex-shrink-0">
-                      <label className={label}>Aspect Ratio</label>
-                      <div className="flex flex-wrap gap-2 max-w-[220px]">
-                        {ASPECT_RATIOS.map((r) => (
-                          <button key={r.value} onClick={() => setAspectRatio(r.value)}
-                            className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all duration-200 ${
-                              aspectRatio === r.value ? chipOn : chipOff
-                            }`}>
-                            {r.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-2 w-32 flex-shrink-0">
-                      <label className={label}>
-                        Images — <span className="text-orange-400">{numOutputs}</span>
-                      </label>
-                      <input type="range" min={1} max={4} value={numOutputs}
-                        onChange={(e) => setNumOutputs(Number(e.target.value))}
-                        className="w-full" />
-                      <div className="flex justify-between text-xs text-zinc-600"><span>1</span><span>4</span></div>
-                    </div>
-
-                    <div className="flex flex-col gap-2 flex-shrink-0">
-                      <label className={`${label} opacity-0 select-none`}>Generate</label>
-                      <button onClick={handleGenerate} disabled={loading || !photo}
-                        className="btn-primary px-8 py-3 rounded-xl font-bold text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none flex items-center justify-center gap-2 whitespace-nowrap">
-                        {loading ? (<><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Generating...</>) : <>✨ Generate Pixar Art</>}
-                      </button>
-                    </div>
-                  </div>
-
-                  {(!photo || error) && (
-                    <div className="flex items-center gap-3 mt-4">
-                      {!photo && <p className="text-xs text-zinc-600">Upload a pet photo to get started</p>}
-                      {error && <div className={errorBox}>{error}</div>}
-                    </div>
-                  )}
-                </div>
-
-                <section className="flex-1 overflow-y-auto p-6">
+              <div className="flex-1 flex flex-col overflow-hidden animate-fade-in relative">
+                <section className="flex-1 overflow-y-auto px-6 pt-6 pb-44">
                   {history.length === 0 && !loading ? (
                     <div className="h-full flex flex-col items-center justify-center gap-4">
                       <div className="text-7xl animate-float">🐾</div>
@@ -1228,9 +1064,9 @@ export default function Home() {
                       <p className="text-sm text-zinc-600">Upload a photo and hit Generate ✨</p>
                     </div>
                   ) : (
-                    <div className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                       {loading && Array.from({ length: numOutputs }).map((_, i) => (
-                        <div key={`sk-${i}`} className="break-inside-avoid rounded-xl skeleton" style={{ aspectRatio: aspectRatio.replace(":", "/") }} />
+                        <div key={`sk-${i}`} className="rounded-2xl skeleton" style={{ aspectRatio: aspectRatio.replace(":", "/") }} />
                       ))}
                       {history.map((img, i) => (
                         <ImageCard
@@ -1243,11 +1079,133 @@ export default function Home() {
                           onEdit={() => openEditor(img)}
                           onScene={() => setComposeTarget(img)}
                           onRemove={() => removeFromHistory(img.url)}
+                          onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
                         />
                       ))}
                     </div>
                   )}
                 </section>
+
+                {/* ── Floating prompt bar ── */}
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-[min(700px,calc(100%-3rem))] z-30 flex flex-col gap-3">
+                  {showGenSettings && (
+                    <div className={`${floatCard} p-4 flex flex-col gap-4 animate-scale-in`}>
+                      <ModelSwitcher value={model} onChange={setModel} compact />
+                      <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+                        <div className="flex flex-col gap-2">
+                          <label className={label}>Aspect Ratio</label>
+                          <div className="flex flex-wrap gap-1.5">
+                            {ASPECT_RATIOS.map((r) => (
+                              <button key={r.value} onClick={() => setAspectRatio(r.value)}
+                                className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-all duration-200 ${
+                                  aspectRatio === r.value ? chipOn : chipOff
+                                }`}>
+                                {r.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-2 w-28">
+                          <label className={label}>
+                            Images — <span className="text-orange-400">{numOutputs}</span>
+                          </label>
+                          <input type="range" min={1} max={4} value={numOutputs}
+                            onChange={(e) => setNumOutputs(Number(e.target.value))}
+                            className="w-full" />
+                        </div>
+                        {photoPreview && (
+                          <div className="flex flex-col gap-2 w-28">
+                            <label className={label}>
+                              Scale — <span className="text-orange-400">{Math.round(photoZoom * 100)}%</span>
+                            </label>
+                            <input type="range" min={20} max={100} value={photoZoom * 100}
+                              onChange={(e) => setPhotoZoom(Number(e.target.value) / 100)}
+                              className="w-full" />
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-zinc-400 dark:text-zinc-500">⌘ + Enter to generate</p>
+                    </div>
+                  )}
+
+                  {(!photo || error) && (
+                    <div className="flex justify-center">
+                      {error
+                        ? <div className={errorBox}>{error}</div>
+                        : <p className="text-xs text-zinc-500 bg-white/70 dark:bg-black/40 backdrop-blur-sm px-3 py-1 rounded-full">Upload a pet photo to get started</p>}
+                    </div>
+                  )}
+
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={handleDrop}
+                    className={`${floatCard} !rounded-[26px] p-2 pl-2.5 flex items-center gap-2 transition-all duration-200 ${
+                      dragging ? "ring-2 ring-orange-400/70 scale-[1.01]" : ""
+                    }`}
+                  >
+                    {photoPreview ? (
+                      <button onClick={() => fileInputRef.current?.click()} title="Change photo"
+                        className="relative w-10 h-10 rounded-2xl overflow-hidden ring-2 ring-orange-400/50 flex-shrink-0 group/photo">
+                        <img src={photoPreview} alt="Uploaded pet" className="w-full h-full object-cover" />
+                        <span
+                          onClick={(e) => { e.stopPropagation(); e.preventDefault(); setPhoto(null); setPhotoPreview(null); setPhotoZoom(1); }}
+                          className="absolute inset-0 hidden group-hover/photo:flex items-center justify-center bg-black/55 text-white text-xs font-bold">
+                          ✕
+                        </span>
+                      </button>
+                    ) : (
+                      <button onClick={() => fileInputRef.current?.click()} title="Upload pet photo — or drop it here"
+                        className={`w-10 h-10 rounded-full flex items-center justify-center text-xl font-light flex-shrink-0 transition-all duration-200 ${
+                          dragging
+                            ? "bg-orange-400/25 text-orange-500 scale-110"
+                            : "bg-black/[0.04] dark:bg-white/[0.06] text-zinc-500 hover:bg-black/[0.08] dark:hover:bg-white/[0.1] hover:text-zinc-800 dark:hover:text-zinc-200"
+                        }`}>
+                        +
+                      </button>
+                    )}
+                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
+                      onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFile(file); }} />
+
+                    <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGenerate(); } }}
+                      placeholder={photo ? "Describe your Pixar scene… (optional)" : "Upload a pet photo, then describe the scene…"}
+                      rows={1}
+                      className="flex-1 bg-transparent text-sm px-2 py-2.5 resize-none focus:outline-none placeholder-zinc-500 text-zinc-900 dark:text-zinc-100" />
+
+                    <button
+                      type="button"
+                      onClick={() => setShowGenSettings((v) => !v)}
+                      title="Model, aspect ratio & more"
+                      className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-200 ${
+                        showGenSettings
+                          ? "bg-orange-500 text-white"
+                          : "bg-black/[0.04] dark:bg-white/[0.06] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+                      }`}>
+                      <SlidersIcon />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleDictation(
+                        (t) => setPrompt((p) => (p ? `${p} ${t}` : t)),
+                        () => setError("Voice input isn't supported in this browser — try Chrome"),
+                      )}
+                      title={listening ? "Stop listening" : "Dictate your prompt"}
+                      className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-200 ${
+                        listening
+                          ? "bg-red-500 text-white animate-pulse"
+                          : "bg-black/[0.04] dark:bg-white/[0.06] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+                      }`}>
+                      <MicIcon />
+                    </button>
+                    <button onClick={handleGenerate} disabled={loading || !photo} title="Generate Pixar Art"
+                      className="btn-primary w-10 h-10 rounded-full font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none flex items-center justify-center flex-shrink-0">
+                      {loading
+                        ? <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                        : <span className="text-base leading-none">✨</span>}
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1266,11 +1224,11 @@ export default function Home() {
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 text-sm">🔍</span>
                       <input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)}
                         placeholder="Search prompts..."
-                        className="pl-8 pr-4 py-2 text-sm bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] rounded-xl text-zinc-900 dark:text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/15 w-52 transition-all duration-200" />
+                        className="pl-8 pr-4 py-2 text-sm bg-black/[0.035] dark:bg-white/[0.045] border border-transparent rounded-full text-zinc-900 dark:text-zinc-100 placeholder-zinc-500 focus:outline-none focus:bg-white dark:focus:bg-white/[0.06] focus:ring-2 focus:ring-orange-400/20 w-52 transition-all duration-200" />
                     </div>
                     {history.length > 0 && (
                       <button onClick={() => { if (confirm("Clear all history?")) setHistory([]); }}
-                        className="text-xs text-red-400/70 hover:text-red-400 transition-colors font-medium px-3 py-2 rounded-lg hover:bg-red-500/10">
+                        className="text-xs text-red-400/70 hover:text-red-400 transition-colors font-medium px-3 py-2 rounded-full hover:bg-red-500/10">
                         Clear all
                       </button>
                     )}
@@ -1282,8 +1240,8 @@ export default function Home() {
                     <button onClick={() => setHistoryFilter(null)}
                       className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 ${
                         historyFilter === null
-                          ? "bg-zinc-900 text-white shadow-lg shadow-black/10 dark:bg-white dark:text-black dark:shadow-white/10"
-                          : "bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:border-black/[0.2] dark:hover:border-white/[0.2]"
+                          ? "bg-zinc-900 text-white shadow-sm dark:bg-white dark:text-black"
+                          : "bg-black/[0.035] dark:bg-white/[0.04] text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
                       }`}>
                       All · {history.length}
                     </button>
@@ -1294,8 +1252,8 @@ export default function Home() {
                         <button key={m.id} onClick={() => setHistoryFilter(historyFilter === m.id ? null : m.id)}
                           className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 ${
                             historyFilter === m.id
-                              ? "bg-orange-500 text-white shadow-lg shadow-orange-500/25"
-                              : "bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] text-zinc-600 dark:text-zinc-400 hover:text-orange-300 hover:border-orange-400/40"
+                              ? "bg-orange-500 text-white shadow-sm shadow-orange-500/25"
+                              : "bg-black/[0.035] dark:bg-white/[0.04] text-zinc-600 dark:text-zinc-400 hover:text-orange-500 dark:hover:text-orange-300"
                           }`}>
                           {m.name} · {count}
                         </button>
@@ -1315,7 +1273,7 @@ export default function Home() {
                     </p>
                   </div>
                 ) : (
-                  <div className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                     {filteredHistory.map((img, i) => (
                       <ImageCard
                         key={`hist-${img.url}-${i}`}
@@ -1328,6 +1286,7 @@ export default function Home() {
                         onEdit={() => openEditor(img)}
                         onScene={() => setComposeTarget(img)}
                         onRemove={() => removeFromHistory(img.url)}
+                        onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
                       />
                     ))}
                   </div>
@@ -1348,7 +1307,7 @@ export default function Home() {
           </button>
           <Image src={lightbox} alt="Preview" width={1024} height={1024}
             className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl animate-scale-in"
-            unoptimized onClick={(e) => e.stopPropagation()} />
+            unoptimized priority onClick={(e) => e.stopPropagation()} />
         </div>
       )}
     </div>
