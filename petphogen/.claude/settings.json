@@ -8,7 +8,8 @@
       "Bash(xargs kill -9)",
       "Read(//private/tmp/**)",
       "Bash(tail -n 10 /tmp/petphogen-dev.log)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(echo \"tsc exit: $?\")"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-linusfujisawa-Desktop-Programming-Petpho-petphogen/e0ba5e66-4db0-4115-8de1-c4172fc88ff6/scratchpad"

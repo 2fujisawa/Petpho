@@ -375,6 +375,29 @@ export default function Home() {
       const saved = localStorage.getItem("petpho-history");
       if (saved) setHistory(JSON.parse(saved));
     } catch {}
+
+    // Merge in blob-stored images so history follows the account, not the browser.
+    fetch("/api/history")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { images?: { url: string; createdAt: number }[] } | null) => {
+        if (!data?.images?.length) return;
+        setHistory((prev) => {
+          const known = new Set(prev.map((x) => x.url));
+          const recovered = data.images!
+            .filter((img) => !known.has(img.url))
+            .map((img) => ({
+              url: img.url,
+              prompt: "",
+              model: "" as ModelId,
+              createdAt: img.createdAt,
+            }));
+          if (!recovered.length) return prev;
+          return [...prev, ...recovered].sort(
+            (a, b) => (b.createdAt ?? Infinity) - (a.createdAt ?? Infinity)
+          );
+        });
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
