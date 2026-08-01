@@ -13,6 +13,11 @@ const ASPECT_RATIOS = [
   { label: "9:16", value: "9:16" },
 ];
 
+function aspectRatioToNumber(ratio: string): number {
+  const [w, h] = ratio.split(":").map(Number);
+  return w / h;
+}
+
 type GeneratedImage = {
   url: string;
   prompt: string;
@@ -109,13 +114,11 @@ const InpaintCanvas = forwardRef<
 });
 
 const label = "text-[11px] font-semibold text-zinc-500 uppercase tracking-[0.14em]";
-const inputDark =
-  "w-full bg-black/[0.035] dark:bg-white/[0.045] border border-transparent rounded-2xl px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-500 resize-none focus:outline-none focus:bg-white dark:focus:bg-white/[0.06] focus:ring-2 focus:ring-orange-400/20 transition-all duration-200";
 const chipOff =
-  "bg-black/[0.035] dark:bg-white/[0.04] border-transparent text-zinc-600 dark:text-zinc-400 hover:bg-black/[0.06] dark:hover:bg-white/[0.07] hover:text-zinc-800 dark:hover:text-zinc-200";
+  "bg-black/[0.035] border-transparent text-zinc-600 hover:bg-black/[0.06] hover:text-zinc-800";
 const chipOn = "bg-orange-500 border-orange-500 text-white shadow-sm shadow-orange-500/25";
 const floatCard =
-  "bg-white dark:bg-[#19191c] rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_2px_rgba(0,0,0,0.3),0_10px_28px_rgba(0,0,0,0.45)]";
+  "bg-white rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_rgba(0,0,0,0.06)]";
 
 function ModelSwitcher({
   value,
@@ -158,7 +161,7 @@ function ModelSwitcher({
             className={`text-left rounded-2xl px-3 py-2.5 transition-all duration-200 ${
               value === m.id
                 ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-sm shadow-orange-500/20"
-                : "bg-black/[0.03] dark:bg-white/[0.035] text-zinc-700 dark:text-zinc-300 hover:bg-black/[0.06] dark:hover:bg-white/[0.06]"
+                : "bg-black/[0.03] text-zinc-700 hover:bg-black/[0.06]"
             }`}>
             <p className="text-xs font-bold leading-tight">{m.name}</p>
             <p className={`text-xs mt-0.5 leading-tight ${value === m.id ? "text-white/80" : "text-zinc-500"}`}>
@@ -189,6 +192,18 @@ function MicIcon() {
       <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
       <line x1="12" y1="19" x2="12" y2="22" />
     </svg>
+  );
+}
+
+function GridSizeSlider({ columns, onChange }: { columns: number; onChange: (n: number) => void }) {
+  return (
+    <div className="flex items-center gap-2 bg-white/80 backdrop-blur-sm rounded-full pl-3 pr-2 py-1.5 shadow-sm flex-shrink-0" title="Adjust how many photos show per row">
+      <span className="text-xs text-zinc-500">🔳</span>
+      <input type="range" min={2} max={8} value={columns}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-20" />
+      <span className="text-[11px] text-zinc-500 font-semibold w-4 text-center">{columns}</span>
+    </div>
   );
 }
 
@@ -231,11 +246,11 @@ function ImageCard({
   showDate?: boolean;
 }) {
   const modelName = MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1];
-  const badgeClass = MODEL_BADGE[img.model] ?? "bg-white/10 text-zinc-700 dark:text-zinc-300";
+  const badgeClass = MODEL_BADGE[img.model] ?? "bg-white/10 text-zinc-700";
   return (
     <div className="break-inside-avoid animate-fade-up" style={{ animationDelay: `${Math.min(index * 35, 350)}ms` }}>
       <div
-        className={`group relative rounded-2xl overflow-hidden bg-white dark:bg-[#18181b] ${
+        className={`group relative rounded-2xl overflow-hidden bg-white ${
           isBroken ? "cursor-default" : "card-glow cursor-pointer"
         }`}
         onClick={() => !isBroken && onOpen()}
@@ -334,6 +349,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"generate" | "history">("generate");
   const [historySearch, setHistorySearch] = useState("");
   const [historyFilter, setHistoryFilter] = useState<ModelId | null>(null);
+  const [galleryColumns, setGalleryColumns] = useState(4);
   const [prompt, setPrompt] = useState("");
   const [showGenSettings, setShowGenSettings] = useState(false);
   const [listening, setListening] = useState(false);
@@ -355,20 +371,6 @@ export default function Home() {
   const inpaintCanvasRef = useRef<InpaintCanvasHandle>(null);
   const historyInitialSaveSkipped = useRef(false);
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
-  const [isDark, setIsDark] = useState(true);
-
-  useEffect(() => {
-    setIsDark(document.documentElement.classList.contains("dark"));
-  }, []);
-
-  function toggleTheme() {
-    const next = !isDark;
-    setIsDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    try {
-      localStorage.setItem("petpho-theme", next ? "dark" : "light");
-    } catch {}
-  }
 
   useEffect(() => {
     try {
@@ -615,6 +617,9 @@ export default function Home() {
     return matchSearch && matchFilter;
   });
 
+  const previewAspect =
+    composeAspectRatio !== "auto" ? aspectRatioToNumber(composeAspectRatio) : bgAspect ?? 16 / 9;
+
   const sidebarActive = composeTarget || editor ? "history" : activeTab;
 
   function navTo(tab: "generate" | "history") {
@@ -647,15 +652,15 @@ export default function Home() {
   const errorBox = "text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2 animate-fade-in";
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f6f6f7] dark:bg-[#0f0f11] text-zinc-800 dark:text-zinc-200">
+    <div className="flex h-screen overflow-hidden bg-[#f6f6f7] text-zinc-800">
 
       {/* ── Sidebar ──────────────────────────────────────────── */}
-      <nav className="w-[212px] flex-shrink-0 flex flex-col bg-white dark:bg-[#141416]">
+      <nav className="w-[212px] flex-shrink-0 flex flex-col bg-white">
         <div className="px-4 pt-6 pb-5 flex items-center gap-2.5 group/brand">
           <Image src="/logo.png" alt="Petpho mascot" width={40} height={40}
             className="w-10 h-10 flex-shrink-0 transition-transform duration-300 group-hover/brand:scale-110 group-hover/brand:-rotate-6" />
           <div className="min-w-0">
-            <p className="text-zinc-900 dark:text-white font-bold text-sm tracking-tight leading-tight">Petpho</p>
+            <p className="text-zinc-900 font-bold text-sm tracking-tight leading-tight">Petpho</p>
             <p className="text-orange-400 text-[11px] font-semibold leading-tight">Gen</p>
           </div>
         </div>
@@ -672,8 +677,8 @@ export default function Home() {
                 onClick={() => navTo(item.id)}
                 className={`group flex items-center gap-3 px-3 py-2 rounded-xl w-full text-left transition-all duration-200 ${
                   active
-                    ? "bg-black/[0.055] dark:bg-white/[0.07] text-zinc-900 dark:text-white"
-                    : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+                    ? "bg-black/[0.055] text-zinc-900"
+                    : "text-zinc-500 hover:text-zinc-800 hover:bg-black/[0.03]"
                 }`}
               >
                 <span className="text-[15px] leading-none transition-transform duration-200 group-hover:scale-110">
@@ -682,7 +687,7 @@ export default function Home() {
                 <span className="text-[13px] font-medium flex-1">{item.name}</span>
                 {item.id === "history" && history.length > 0 && (
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold transition-colors duration-200 ${
-                    active ? "bg-orange-400/15 text-orange-500 dark:text-orange-300" : "bg-black/[0.05] dark:bg-white/[0.06] text-zinc-500"
+                    active ? "bg-orange-400/15 text-orange-500" : "bg-black/[0.05] text-zinc-500"
                   }`}>
                     {history.length}
                   </span>
@@ -696,15 +701,8 @@ export default function Home() {
 
         <div className="px-3 pb-2">
           <button
-            onClick={toggleTheme}
-            className="flex items-center gap-3 px-3 py-2 rounded-xl w-full text-left text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-all duration-200"
-          >
-            <span className="text-[15px] leading-none">{isDark ? "🌙" : "☀️"}</span>
-            <span className="text-[13px] font-medium">{isDark ? "Dark" : "Light"}</span>
-          </button>
-          <button
             onClick={signOut}
-            className="flex items-center gap-3 px-3 py-2 rounded-xl w-full text-left text-zinc-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-500/[0.06] transition-all duration-200"
+            className="flex items-center gap-3 px-3 py-2 rounded-xl w-full text-left text-zinc-500 hover:text-red-500 hover:bg-red-500/[0.06] transition-all duration-200"
           >
             <span className="text-[15px] leading-none">🚪</span>
             <span className="text-[13px] font-medium">Sign out</span>
@@ -713,7 +711,7 @@ export default function Home() {
 
         <div className="px-4 py-3.5 flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-          <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-semibold uppercase tracking-[0.14em]">Admin</span>
+          <span className="text-[10px] text-zinc-400 font-semibold uppercase tracking-[0.14em]">Admin</span>
         </div>
       </nav>
 
@@ -727,16 +725,16 @@ export default function Home() {
               <div className="flex items-center gap-3 pb-1">
                 <button
                   onClick={() => { setComposeTarget(null); setBackgroundPhoto(null); setBackgroundPhotoPreview(null); setSelectedPremadeBg(null); setBgAspect(null); setComposeError(null); }}
-                  className="w-7 h-7 rounded-full bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.1] dark:hover:bg-white/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center text-sm"
+                  className="w-7 h-7 rounded-full bg-black/[0.04] hover:bg-black/[0.1] text-zinc-600 hover:text-zinc-900 transition-all flex items-center justify-center text-sm"
                 >
                   ←
                 </button>
-                <span className="font-bold text-zinc-900 dark:text-white text-sm">Place in Scene</span>
+                <span className="font-bold text-zinc-900 text-sm">Place in Scene</span>
               </div>
 
               <div className="flex flex-col gap-2">
                 <label className={label}>Your Pixar Pet</label>
-                <div className="rounded-2xl overflow-hidden ring-1 ring-black/[0.08] dark:ring-white/[0.1]">
+                <div className="rounded-2xl overflow-hidden ring-1 ring-black/[0.08]">
                   <img src={composeTarget.url} alt="Pixar pet" className="w-full h-40 object-cover" />
                 </div>
               </div>
@@ -744,16 +742,16 @@ export default function Home() {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <label className={label}>Background Photo</label>
-                  <div className="flex rounded-full bg-black/[0.035] dark:bg-white/[0.04] p-0.5 text-[11px] font-semibold">
+                  <div className="flex rounded-full bg-black/[0.035] p-0.5 text-[11px] font-semibold">
                     <button onClick={() => setBgSourceTab("premade")}
                       className={`px-2.5 py-1 rounded-md transition-all duration-200 ${
-                        bgSourceTab === "premade" ? "bg-sky-500 text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                        bgSourceTab === "premade" ? "bg-sky-500 text-white" : "text-zinc-500 hover:text-zinc-700"
                       }`}>
                       Premade
                     </button>
                     <button onClick={() => setBgSourceTab("upload")}
                       className={`px-2.5 py-1 rounded-md transition-all duration-200 ${
-                        bgSourceTab === "upload" ? "bg-sky-500 text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                        bgSourceTab === "upload" ? "bg-sky-500 text-white" : "text-zinc-500 hover:text-zinc-700"
                       }`}>
                       Upload
                     </button>
@@ -767,14 +765,14 @@ export default function Home() {
                         <button key={bg.id} onClick={() => selectPremadeBackground(bg)}
                           title={bg.name}
                           className={`relative rounded-lg overflow-hidden aspect-square ring-2 transition-all duration-200 ${
-                            selectedPremadeBg === bg.id ? "ring-orange-400" : "ring-black/[0.08] dark:ring-white/[0.08] hover:ring-black/[0.3] dark:hover:ring-white/[0.3]"
+                            selectedPremadeBg === bg.id ? "ring-orange-400" : "ring-black/[0.08] hover:ring-black/[0.3]"
                           }`}>
                           <img src={bg.file} alt={bg.name} className="w-full h-full object-cover" />
                         </button>
                       ))}
                     </div>
                   ) : (
-                    <div className="rounded-xl border-2 border-dashed border-black/[0.1] dark:border-white/[0.1] bg-black/[0.02] dark:bg-white/[0.02] py-6 px-3 text-center">
+                    <div className="rounded-xl border-2 border-dashed border-black/[0.1] bg-black/[0.02] py-6 px-3 text-center">
                       <p className="text-xs text-zinc-500">No premade backgrounds yet</p>
                       <p className="text-[11px] text-zinc-600 mt-1">Add photos to public/backgrounds</p>
                     </div>
@@ -795,7 +793,7 @@ export default function Home() {
                     className="cursor-pointer flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-sky-400/25 bg-sky-400/[0.04] hover:border-sky-400/60 hover:bg-sky-400/[0.1] py-8 transition-all duration-200"
                   >
                     <span className="text-3xl">🖼️</span>
-                    <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Upload a background</p>
+                    <p className="text-sm font-medium text-zinc-700">Upload a background</p>
                     <p className="text-xs text-zinc-600">Drag your pet into place after</p>
                   </div>
                 )}
@@ -868,14 +866,14 @@ export default function Home() {
                     <span className="block w-14 h-14 border-4 border-sky-500/20 border-t-sky-400 rounded-full animate-spin" />
                     <span className="absolute inset-0 rounded-full animate-glow-pulse" style={{ boxShadow: "0 0 30px rgba(56,189,248,0.3)" }} />
                   </div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">Placing your pet in the scene...</p>
+                  <p className="text-sm text-zinc-600">Placing your pet in the scene...</p>
                 </div>
               ) : backgroundPhotoPreview ? (
                 <div className="flex flex-col items-center gap-3 animate-scale-in w-full">
                   <div
                     ref={stageRef}
-                    className="relative rounded-2xl overflow-hidden ring-1 ring-black/[0.1] dark:ring-white/[0.1] shadow-2xl shadow-black/50 select-none bg-black/20"
-                    style={{ aspectRatio: bgAspect ? `${bgAspect}` : "16/9", width: "100%", maxWidth: 640 }}
+                    className="relative rounded-2xl overflow-hidden ring-1 ring-black/[0.1] shadow-2xl shadow-black/50 select-none bg-black/20"
+                    style={{ aspectRatio: `${previewAspect}`, width: "100%", maxWidth: 640 }}
                   >
                     <img
                       src={backgroundPhotoPreview}
@@ -939,10 +937,10 @@ export default function Home() {
             <div className={`flex flex-col w-[236px] ${floatCard} p-4 gap-4 overflow-y-auto flex-shrink-0 my-6 ml-6`}>
               <div className="flex items-center gap-3 pb-1">
                 <button onClick={() => setEditor(null)}
-                  className="w-7 h-7 rounded-full bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.1] dark:hover:bg-white/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center text-sm">
+                  className="w-7 h-7 rounded-full bg-black/[0.04] hover:bg-black/[0.1] text-zinc-600 hover:text-zinc-900 transition-all flex items-center justify-center text-sm">
                   ←
                 </button>
-                <span className="font-bold text-zinc-900 dark:text-white text-sm">Editor</span>
+                <span className="font-bold text-zinc-900 text-sm">Editor</span>
               </div>
 
               <div className="flex flex-col gap-2">
@@ -953,7 +951,7 @@ export default function Home() {
                 <p className="text-xs text-zinc-500 italic line-clamp-2">&ldquo;{editor.sourceImage.prompt}&rdquo;</p>
               </div>
 
-              <div className="border-t border-black/[0.05] dark:border-white/[0.06] pt-4 flex flex-col gap-2">
+              <div className="border-t border-black/[0.05] pt-4 flex flex-col gap-2">
                 <label className={label}>Results{editor.results.length > 0 ? ` — ${editor.results.length}` : ""}</label>
                 {editor.loading && <div className="rounded-2xl skeleton w-full" style={{ aspectRatio: "1/1" }} />}
                 {editor.results.length === 0 && !editor.loading ? (
@@ -962,7 +960,7 @@ export default function Home() {
                   <div className="flex flex-col gap-3">
                     {editor.results.map((img, i) => (
                       <div key={`${img.url}-${i}`}
-                        className="group relative rounded-2xl overflow-hidden bg-white dark:bg-[#18181b] card-glow cursor-pointer animate-scale-in"
+                        className="group relative rounded-2xl overflow-hidden bg-white card-glow cursor-pointer animate-scale-in"
                         onClick={() => setLightbox(img.url)}>
                         <Image src={img.url} alt={img.prompt} width={512} height={512} className="w-full h-auto object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
                         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-2.5 gap-1.5">
@@ -998,7 +996,7 @@ export default function Home() {
                     onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleApplyInpaint(); } }}
                     placeholder="Describe what to put in the brushed area…"
                     rows={1}
-                    className="flex-1 bg-transparent text-sm py-2.5 resize-none focus:outline-none placeholder-zinc-500 text-zinc-900 dark:text-zinc-100" />
+                    className="flex-1 bg-transparent text-sm py-2.5 resize-none focus:outline-none placeholder-zinc-500 text-zinc-900" />
                   <button
                     type="button"
                     onClick={() => toggleDictation(
@@ -1009,7 +1007,7 @@ export default function Home() {
                     className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-200 ${
                       listening
                         ? "bg-red-500 text-white animate-pulse"
-                        : "bg-black/[0.04] dark:bg-white/[0.06] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+                        : "bg-black/[0.04] text-zinc-500 hover:text-zinc-800"
                     }`}>
                     <MicIcon />
                   </button>
@@ -1083,12 +1081,9 @@ export default function Home() {
           </div>
         )}
 
-        {/* MAIN VIEW */}
-        {!composeTarget && !editor && (
+        {/* CREATE TAB */}
+        {!composeTarget && !editor && activeTab === "generate" && (
           <div className="flex-1 flex overflow-hidden">
-
-            {/* ── CREATE TAB ─────────────────────────────────── */}
-            {activeTab === "generate" && (
               <div className="flex-1 flex flex-col overflow-hidden animate-fade-in relative">
                 <section className="flex-1 overflow-y-auto px-6 pt-6 pb-44">
                   {history.length === 0 && !loading ? (
@@ -1096,11 +1091,15 @@ export default function Home() {
                       <div className="animate-float logo-glow">
                         <Image src="/logo.png" alt="Petpho mascot" width={160} height={160} className="w-36 h-36" priority />
                       </div>
-                      <p className="text-base font-semibold text-zinc-700 dark:text-zinc-300">Your Pixar pet portraits will appear here</p>
+                      <p className="text-base font-semibold text-zinc-700">Your Pixar pet portraits will appear here</p>
                       <p className="text-sm text-zinc-600">Upload a photo and hit Generate ✨</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                    <>
+                      <div className="flex justify-end mb-3">
+                        <GridSizeSlider columns={galleryColumns} onChange={setGalleryColumns} />
+                      </div>
+                      <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${galleryColumns}, minmax(0, 1fr))` }}>
                       {loading && Array.from({ length: numOutputs }).map((_, i) => (
                         <div key={`sk-${i}`} className="rounded-2xl skeleton" style={{ aspectRatio: aspectRatio.replace(":", "/") }} />
                       ))}
@@ -1118,7 +1117,8 @@ export default function Home() {
                           onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
                         />
                       ))}
-                    </div>
+                      </div>
+                    </>
                   )}
                 </section>
 
@@ -1160,7 +1160,7 @@ export default function Home() {
                           </div>
                         )}
                       </div>
-                      <p className="text-[11px] text-zinc-400 dark:text-zinc-500">⌘ + Enter to generate</p>
+                      <p className="text-[11px] text-zinc-400">⌘ + Enter to generate</p>
                     </div>
                   )}
 
@@ -1168,7 +1168,7 @@ export default function Home() {
                     <div className="flex justify-center">
                       {error
                         ? <div className={errorBox}>{error}</div>
-                        : <p className="text-xs text-zinc-500 bg-white/70 dark:bg-black/40 backdrop-blur-sm px-3 py-1 rounded-full">Upload a pet photo to get started</p>}
+                        : <p className="text-xs text-zinc-500 bg-white/70 backdrop-blur-sm px-3 py-1 rounded-full">Upload a pet photo to get started</p>}
                     </div>
                   )}
 
@@ -1195,7 +1195,7 @@ export default function Home() {
                         className={`w-10 h-10 rounded-full flex items-center justify-center text-xl font-light flex-shrink-0 transition-all duration-200 ${
                           dragging
                             ? "bg-orange-400/25 text-orange-500 scale-110"
-                            : "bg-black/[0.04] dark:bg-white/[0.06] text-zinc-500 hover:bg-black/[0.08] dark:hover:bg-white/[0.1] hover:text-zinc-800 dark:hover:text-zinc-200"
+                            : "bg-black/[0.04] text-zinc-500 hover:bg-black/[0.08] hover:text-zinc-800"
                         }`}>
                         +
                       </button>
@@ -1207,7 +1207,7 @@ export default function Home() {
                       onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGenerate(); } }}
                       placeholder={photo ? "Describe your Pixar scene… (optional)" : "Upload a pet photo, then describe the scene…"}
                       rows={1}
-                      className="flex-1 bg-transparent text-sm px-2 py-2.5 resize-none focus:outline-none placeholder-zinc-500 text-zinc-900 dark:text-zinc-100" />
+                      className="flex-1 bg-transparent text-sm px-2 py-2.5 resize-none focus:outline-none placeholder-zinc-500 text-zinc-900" />
 
                     <button
                       type="button"
@@ -1216,7 +1216,7 @@ export default function Home() {
                       className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-200 ${
                         showGenSettings
                           ? "bg-orange-500 text-white"
-                          : "bg-black/[0.04] dark:bg-white/[0.06] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+                          : "bg-black/[0.04] text-zinc-500 hover:text-zinc-800"
                       }`}>
                       <SlidersIcon />
                     </button>
@@ -1230,7 +1230,7 @@ export default function Home() {
                       className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-200 ${
                         listening
                           ? "bg-red-500 text-white animate-pulse"
-                          : "bg-black/[0.04] dark:bg-white/[0.06] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+                          : "bg-black/[0.04] text-zinc-500 hover:text-zinc-800"
                       }`}>
                       <MicIcon />
                     </button>
@@ -1243,95 +1243,95 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-            )}
-
-            {/* ── EDIT TAB ────────────────────────────────────── */}
-            {activeTab === "history" && (
-              <section className="flex-1 overflow-y-auto p-8 animate-fade-in">
-                <div className="flex items-start justify-between mb-6 gap-4">
-                  <div className="animate-slide-in-left">
-                    <h2 className="text-2xl font-bold text-zinc-900 dark:text-white tracking-tight">Edit</h2>
-                    <p className="text-sm text-zinc-500 mt-0.5">
-                      {history.length} image{history.length !== 1 ? "s" : ""} generated
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 text-sm">🔍</span>
-                      <input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)}
-                        placeholder="Search prompts..."
-                        className="pl-8 pr-4 py-2 text-sm bg-black/[0.035] dark:bg-white/[0.045] border border-transparent rounded-full text-zinc-900 dark:text-zinc-100 placeholder-zinc-500 focus:outline-none focus:bg-white dark:focus:bg-white/[0.06] focus:ring-2 focus:ring-orange-400/20 w-52 transition-all duration-200" />
-                    </div>
-                    {history.length > 0 && (
-                      <button onClick={() => { if (confirm("Clear all history?")) setHistory([]); }}
-                        className="text-xs text-red-400/70 hover:text-red-400 transition-colors font-medium px-3 py-2 rounded-full hover:bg-red-500/10">
-                        Clear all
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {history.length > 0 && (
-                  <div className="flex gap-2 mb-6 flex-wrap">
-                    <button onClick={() => setHistoryFilter(null)}
-                      className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 ${
-                        historyFilter === null
-                          ? "bg-zinc-900 text-white shadow-sm dark:bg-white dark:text-black"
-                          : "bg-black/[0.035] dark:bg-white/[0.04] text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
-                      }`}>
-                      All · {history.length}
-                    </button>
-                    {MODELS.map((m) => {
-                      const count = history.filter((img) => img.model === m.id).length;
-                      if (count === 0) return null;
-                      return (
-                        <button key={m.id} onClick={() => setHistoryFilter(historyFilter === m.id ? null : m.id)}
-                          className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 ${
-                            historyFilter === m.id
-                              ? "bg-orange-500 text-white shadow-sm shadow-orange-500/25"
-                              : "bg-black/[0.035] dark:bg-white/[0.04] text-zinc-600 dark:text-zinc-400 hover:text-orange-500 dark:hover:text-orange-300"
-                          }`}>
-                          {m.name} · {count}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {filteredHistory.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-32 gap-4">
-                    <div className="animate-float logo-glow">
-                      <Image src="/logo.png" alt="Petpho mascot" width={120} height={120} className="w-28 h-28" />
-                    </div>
-                    <p className="text-base font-semibold text-zinc-700 dark:text-zinc-300">
-                      {history.length === 0 ? "No images yet" : "No results found"}
-                    </p>
-                    <p className="text-sm text-zinc-600">
-                      {history.length === 0 ? "Generate your first Pixar pet portrait" : "Try a different search or filter"}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                    {filteredHistory.map((img, i) => (
-                      <ImageCard
-                        key={`hist-${img.url}-${i}`}
-                        img={img}
-                        index={i}
-                        showDate
-                        isBroken={brokenImages.has(img.url)}
-                        onBroken={() => markBroken(img.url)}
-                        onOpen={() => setLightbox(img.url)}
-                        onEdit={() => openEditor(img)}
-                        onScene={() => setComposeTarget(img)}
-                        onRemove={() => removeFromHistory(img.url)}
-                        onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </section>
-            )}
           </div>
+        )}
+
+        {/* EDIT TAB — pick a generated photo to open in the editor */}
+        {!composeTarget && !editor && activeTab === "history" && (
+          <section className="flex-1 overflow-y-auto p-8 animate-fade-in">
+            <div className="flex items-start justify-between mb-6 gap-4">
+              <div className="animate-slide-in-left">
+                <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">Edit</h2>
+                <p className="text-sm text-zinc-500 mt-0.5">
+                  {history.length === 0 ? "Generate a photo first" : "Pick a photo below to open it in the editor"}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 text-sm">🔍</span>
+                  <input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)}
+                    placeholder="Search prompts..."
+                    className="pl-8 pr-4 py-2 text-sm bg-black/[0.035] border border-transparent rounded-full text-zinc-900 placeholder-zinc-500 focus:outline-none focus:bg-white focus:ring-2 focus:ring-orange-400/20 w-52 transition-all duration-200" />
+                </div>
+                {history.length > 0 && <GridSizeSlider columns={galleryColumns} onChange={setGalleryColumns} />}
+                {history.length > 0 && (
+                  <button onClick={() => { if (confirm("Clear all history?")) setHistory([]); }}
+                    className="text-xs text-red-400/70 hover:text-red-400 transition-colors font-medium px-3 py-2 rounded-full hover:bg-red-500/10">
+                    Clear all
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {history.length > 0 && (
+              <div className="flex gap-2 mb-6 flex-wrap">
+                <button onClick={() => setHistoryFilter(null)}
+                  className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 ${
+                    historyFilter === null
+                      ? "bg-zinc-900 text-white shadow-sm"
+                      : "bg-black/[0.035] text-zinc-600 hover:text-zinc-800"
+                  }`}>
+                  All · {history.length}
+                </button>
+                {MODELS.map((m) => {
+                  const count = history.filter((img) => img.model === m.id).length;
+                  if (count === 0) return null;
+                  return (
+                    <button key={m.id} onClick={() => setHistoryFilter(historyFilter === m.id ? null : m.id)}
+                      className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 ${
+                        historyFilter === m.id
+                          ? "bg-orange-500 text-white shadow-sm shadow-orange-500/25"
+                          : "bg-black/[0.035] text-zinc-600 hover:text-orange-500"
+                      }`}>
+                      {m.name} · {count}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {filteredHistory.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-32 gap-4">
+                <div className="animate-float logo-glow">
+                  <Image src="/logo.png" alt="Petpho mascot" width={120} height={120} className="w-28 h-28" />
+                </div>
+                <p className="text-base font-semibold text-zinc-700">
+                  {history.length === 0 ? "No images yet" : "No results found"}
+                </p>
+                <p className="text-sm text-zinc-600">
+                  {history.length === 0 ? "Generate your first Pixar pet portrait" : "Try a different search or filter"}
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${galleryColumns}, minmax(0, 1fr))` }}>
+                {filteredHistory.map((img, i) => (
+                  <ImageCard
+                    key={`hist-${img.url}-${i}`}
+                    img={img}
+                    index={i}
+                    showDate
+                    isBroken={brokenImages.has(img.url)}
+                    onBroken={() => markBroken(img.url)}
+                    onOpen={() => openEditor(img)}
+                    onEdit={() => openEditor(img)}
+                    onScene={() => setComposeTarget(img)}
+                    onRemove={() => removeFromHistory(img.url)}
+                    onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
         )}
       </div>
 
@@ -1339,7 +1339,7 @@ export default function Home() {
       {lightbox && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-8 animate-fade-in"
           onClick={() => setLightbox(null)}>
-          <button className="absolute top-4 right-4 text-white/60 hover:text-white text-2xl bg-black/[0.06] dark:bg-white/[0.06] hover:bg-black/[0.15] dark:hover:bg-white/[0.15] w-10 h-10 rounded-full flex items-center justify-center transition-all"
+          <button className="absolute top-4 right-4 text-white/60 hover:text-white text-2xl bg-black/[0.06] hover:bg-black/[0.15] w-10 h-10 rounded-full flex items-center justify-center transition-all"
             onClick={() => setLightbox(null)}>
             ✕
           </button>

@@ -9,7 +9,8 @@
       "Read(//private/tmp/**)",
       "Bash(tail -n 10 /tmp/petphogen-dev.log)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)",
-      "Bash(echo \"tsc exit: $?\")"
+      "Bash(echo \"tsc exit: $?\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/studio)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-linusfujisawa-Desktop-Programming-Petpho-petphogen/e0ba5e66-4db0-4115-8de1-c4172fc88ff6/scratchpad"
