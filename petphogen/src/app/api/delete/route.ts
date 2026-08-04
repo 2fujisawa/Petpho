@@ -14,10 +14,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await del(url);
+    // Explicit token: with BLOB_STORE_ID set, the SDK otherwise prefers OIDC
+    // auth, which is not enabled for local development.
+    await del(url, { token: process.env.BLOB_READ_WRITE_TOKEN });
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("Blob delete error:", err);
-    return NextResponse.json({ ok: true, skipped: true });
+    return NextResponse.json({ error: "Delete failed" }, { status: 500 });
   }
 }

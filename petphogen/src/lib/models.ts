@@ -17,6 +17,9 @@ export type ModelConfig = {
   // Enum of aspect_ratio values this model actually accepts (compose models only).
   // Include "match_input_image" if the model supports it as a literal value.
   supportedAspectRatios?: string[];
+  // Enum of resolution values this model accepts (e.g. ["1K", "2K", "4K"]).
+  // Omitted for models with no resolution control.
+  supportedResolutions?: string[];
 };
 
 export const MODELS: ModelConfig[] = [
@@ -76,6 +79,7 @@ export const COMPOSE_MODELS: ModelConfig[] = [
     imageIsArray: true,
     outputFormat: "jpg",
     supportedAspectRatios: ["match_input_image", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+    supportedResolutions: ["1K", "2K", "4K"],
   },
   {
     id: "google/nano-banana",
@@ -154,6 +158,18 @@ export function resolveComposeAspectRatio(
 function parseAspectRatio(value: string): number {
   const [w, h] = value.split(":").map(Number);
   return w && h ? w / h : 1;
+}
+
+// Resolve the resolution value to send for a compose model. Returns undefined
+// when the model has no resolution control, or the choice isn't one of its
+// supported values — the model then falls back to its own default.
+export function resolveComposeResolution(
+  config: ModelConfig,
+  userChoice: string | undefined
+): string | undefined {
+  const options = config.supportedResolutions;
+  if (!options || !userChoice) return undefined;
+  return options.includes(userChoice) ? userChoice : undefined;
 }
 
 // Some models (e.g. gpt-image-2) always return an array of image URLs even

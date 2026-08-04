@@ -7,6 +7,7 @@ import {
   buildComposeImageInput,
   extractImageUrl,
   resolveComposeAspectRatio,
+  resolveComposeResolution,
   DEFAULT_COMPOSE_MODEL,
 } from "@/lib/models";
 
@@ -24,6 +25,7 @@ export async function POST(req: NextRequest) {
   const backgroundPhoto = formData.get("backgroundPhoto");
   const modelId = (formData.get("model") as string) || DEFAULT_COMPOSE_MODEL;
   const aspectRatioChoice = (formData.get("aspectRatio") as string) || "auto";
+  const resolutionChoice = (formData.get("resolution") as string) || undefined;
   const petX = clamp(parseFloat((formData.get("petX") as string) || "50"), 0, 100);
   const petY = clamp(parseFloat((formData.get("petY") as string) || "65"), 0, 100);
   const petScale = clamp(parseFloat((formData.get("petScale") as string) || "35"), 5, 100);
@@ -75,12 +77,14 @@ export async function POST(req: NextRequest) {
     const prompt = `The second image shows a Pixar 3D animated character in full detail — preserve its exact appearance, colors, features, and animation style. The first image is a rough placement composite showing that character pasted onto a background scene at a specific position and size. Blend the character into the scene naturally at that exact position and size: add matching lighting and shadows, smooth the edges, and correct perspective so it looks like a single cohesive Pixar movie still. Do not move, resize, or change the pose of the character from where it appears in the first image. Cinematic quality.`;
 
     const aspectRatio = resolveComposeAspectRatio(config, aspectRatioChoice, bgWidth, bgHeight);
+    const resolution = resolveComposeResolution(config, resolutionChoice);
 
     const output = await replicate.run(config.id as `${string}/${string}`, {
       input: {
         prompt,
         output_format: config.outputFormat,
         ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+        ...(resolution ? { resolution } : {}),
         ...config.extraInput,
         ...buildComposeImageInput(config, [uploadedComposite.urls.get, sourceImageUrl]),
       },

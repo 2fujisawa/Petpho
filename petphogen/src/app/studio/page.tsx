@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
-import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, type ModelId, type ModelConfig } from "@/lib/models";
+import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, getComposeModelConfig, type ModelId, type ModelConfig } from "@/lib/models";
 import { PREMADE_BACKGROUNDS } from "@/lib/premadeBackgrounds";
 
 const ASPECT_RATIOS = [
@@ -207,6 +207,42 @@ function GridSizeSlider({ columns, onChange }: { columns: number; onChange: (n: 
   );
 }
 
+function SelectToolbar({
+  selectMode, selectedCount, onToggle, onSelectAll, onDelete,
+}: {
+  selectMode: boolean;
+  selectedCount: number;
+  onToggle: () => void;
+  onSelectAll: () => void;
+  onDelete: () => void;
+}) {
+  if (!selectMode) {
+    return (
+      <button onClick={onToggle}
+        className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 bg-black/[0.035] text-zinc-600 hover:text-zinc-800 hover:bg-black/[0.06] flex-shrink-0">
+        Select
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2 flex-shrink-0">
+      <span className="text-xs text-zinc-500 font-medium whitespace-nowrap">{selectedCount} selected</span>
+      <button onClick={onSelectAll}
+        className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 bg-black/[0.035] text-zinc-600 hover:text-zinc-800 hover:bg-black/[0.06]">
+        Select all
+      </button>
+      <button onClick={onDelete} disabled={selectedCount === 0}
+        className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 bg-red-500 text-white hover:bg-red-400 disabled:opacity-40 disabled:cursor-not-allowed">
+        Delete{selectedCount > 0 ? ` (${selectedCount})` : ""}
+      </button>
+      <button onClick={onToggle}
+        className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 text-zinc-500 hover:text-zinc-800 hover:bg-black/[0.06]">
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 const MODEL_BADGE: Record<string, string> = {
   "black-forest-labs/flux-kontext-pro": "bg-violet-500/20 text-violet-300",
   "stability-ai/stable-diffusion-3.5-large": "bg-blue-500/20 text-blue-300",
@@ -233,6 +269,7 @@ function formatDate(ts?: number) {
 
 function ImageCard({
   img, index, onOpen, onEdit, onScene, onRemove, onViewOriginal, isBroken, onBroken, showDate,
+  selectMode = false, selected = false, onToggleSelect,
 }: {
   img: GeneratedImage;
   index: number;
@@ -244,25 +281,40 @@ function ImageCard({
   isBroken: boolean;
   onBroken: () => void;
   showDate?: boolean;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const modelName = MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1];
   const badgeClass = MODEL_BADGE[img.model] ?? "bg-white/10 text-zinc-700";
   return (
     <div className="break-inside-avoid animate-fade-up" style={{ animationDelay: `${Math.min(index * 35, 350)}ms` }}>
       <div
-        className={`group relative rounded-2xl overflow-hidden bg-white ${
-          isBroken ? "cursor-default" : "card-glow cursor-pointer"
-        }`}
-        onClick={() => !isBroken && onOpen()}
+        className={`group relative rounded-2xl overflow-hidden bg-white cursor-pointer transition-opacity duration-150 ${
+          isBroken ? "" : "card-glow"
+        } ${selectMode && !selected ? "opacity-60" : ""} ${selected ? "ring-2 ring-orange-400" : ""}`}
+        onClick={() => {
+          if (selectMode) { onToggleSelect?.(); return; }
+          if (!isBroken) onOpen();
+        }}
       >
+        {selectMode && (
+          <div className={`absolute top-2 right-2 z-10 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${
+            selected ? "bg-orange-500 border-orange-500" : "bg-white/70 border-white backdrop-blur-sm"
+          }`}>
+            {selected && <span className="text-white text-[10px] leading-none">✓</span>}
+          </div>
+        )}
         {isBroken ? (
           <div className="aspect-square flex flex-col items-center justify-center gap-2 p-4">
             <span className="text-3xl opacity-30">🖼️</span>
             <p className="text-xs text-zinc-500 font-medium">Expired</p>
-            <button onClick={(e) => { e.stopPropagation(); onRemove(); }}
-              className="text-xs bg-red-500/15 hover:bg-red-500/30 text-red-400 px-3 py-1 rounded-full transition-colors font-medium mt-1">
-              Remove
-            </button>
+            {!selectMode && (
+              <button onClick={(e) => { e.stopPropagation(); onRemove(); }}
+                className="text-xs bg-red-500/15 hover:bg-red-500/30 text-red-400 px-3 py-1 rounded-full transition-colors font-medium mt-1">
+                Remove
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -272,45 +324,45 @@ function ImageCard({
                 unoptimized onError={onBroken} priority={index === 0} />
             </div>
             {/* Hover overlay */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
-              <p className="text-xs text-white/90 line-clamp-2 font-medium leading-relaxed translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
-                {img.prompt}
-              </p>
-              <div className="flex gap-1.5 flex-wrap translate-y-2 group-hover:translate-y-0 transition-transform duration-300 delay-[40ms]">
-                <button onClick={(e) => { e.stopPropagation(); onEdit(); }}
-                  className="text-xs bg-orange-500/95 hover:bg-orange-400 text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
-                  ✏️ Edit
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); onScene(); }}
-                  className="text-xs bg-sky-500/95 hover:bg-sky-400 text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
-                  🖼️ Scene
-                </button>
-                {img.uploadUrl && (
-                  <button onClick={(e) => { e.stopPropagation(); onViewOriginal(); }}
-                    className="text-xs bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
-                    🐾 Original
+            {!selectMode && (
+              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
+                <p className="text-xs text-white/90 line-clamp-2 font-medium leading-relaxed translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
+                  {img.prompt}
+                </p>
+                <div className="flex gap-1.5 flex-wrap translate-y-2 group-hover:translate-y-0 transition-transform duration-300 delay-[40ms]">
+                  <button onClick={(e) => { e.stopPropagation(); onEdit(); }}
+                    className="text-xs bg-orange-500/95 hover:bg-orange-400 text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
+                    ✏️ Edit
                   </button>
-                )}
-                <a href={img.url} download onClick={(e) => e.stopPropagation()}
-                  className="text-xs bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white w-6 h-6 flex items-center justify-center rounded-full transition-colors">
-                  ↓
-                </a>
-                <button onClick={(e) => { e.stopPropagation(); onRemove(); }}
-                  className="text-xs bg-red-500/70 hover:bg-red-500 text-white w-6 h-6 flex items-center justify-center rounded-full transition-colors">
-                  🗑️
-                </button>
+                  <button onClick={(e) => { e.stopPropagation(); onScene(); }}
+                    className="text-xs bg-sky-500/95 hover:bg-sky-400 text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
+                    🖼️ Scene
+                  </button>
+                  {img.uploadUrl && (
+                    <button onClick={(e) => { e.stopPropagation(); onViewOriginal(); }}
+                      className="text-xs bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
+                      🐾 Original
+                    </button>
+                  )}
+                  <a href={img.url} download onClick={(e) => e.stopPropagation()}
+                    className="text-xs bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white w-6 h-6 flex items-center justify-center rounded-full transition-colors">
+                    ↓
+                  </a>
+                </div>
               </div>
-            </div>
+            )}
             {/* Badges */}
             <div className="absolute top-2 left-2 right-2 flex justify-between items-start pointer-events-none">
-              {img.sourceUrl && (
+              {img.sourceUrl && !selectMode && (
                 <span className="text-[10px] bg-orange-500/90 backdrop-blur-sm text-white px-2 py-0.5 rounded-full font-semibold">
                   Edited
                 </span>
               )}
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto backdrop-blur-sm ${badgeClass}`}>
-                {modelName}
-              </span>
+              {!selectMode && (
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto backdrop-blur-sm ${badgeClass}`}>
+                  {modelName}
+                </span>
+              )}
             </div>
             {showDate && formatDate(img.createdAt) && (
               <div className="absolute bottom-2 right-2 pointer-events-none">
@@ -344,6 +396,7 @@ export default function Home() {
   const [composeTarget, setComposeTarget] = useState<GeneratedImage | null>(null);
   const [composeModel, setComposeModel] = useState<ModelId>(DEFAULT_COMPOSE_MODEL);
   const [composeAspectRatio, setComposeAspectRatio] = useState("auto");
+  const [composeResolution, setComposeResolution] = useState("2K");
   const [composeLoading, setComposeLoading] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"generate" | "history">("generate");
@@ -371,6 +424,8 @@ export default function Home() {
   const inpaintCanvasRef = useRef<InpaintCanvasHandle>(null);
   const historyInitialSaveSkipped = useRef(false);
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     try {
@@ -409,6 +464,17 @@ export default function Home() {
     }
     localStorage.setItem("petpho-history", JSON.stringify(history));
   }, [history]);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { setLightbox(null); return; }
+      if (e.key === "ArrowLeft") navigateLightbox(-1);
+      else if (e.key === "ArrowRight") navigateLightbox(1);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox, history]);
 
   async function handleApplyInpaint() {
     if (!editor || !editor.editPrompt.trim()) return;
@@ -585,6 +651,7 @@ export default function Home() {
       fd.append("backgroundPhoto", backgroundPhoto);
       fd.append("model", composeModel);
       fd.append("aspectRatio", composeAspectRatio);
+      fd.append("resolution", composeResolution);
       fd.append("petX", String(petPos.x));
       fd.append("petY", String(petPos.y));
       fd.append("petScale", String(petScale));
@@ -604,6 +671,7 @@ export default function Home() {
       setPetPos({ x: 50, y: 65 });
       setPetScale(35);
       setComposeAspectRatio("auto");
+      setComposeResolution("2K");
     } catch (err) {
       setComposeError(err instanceof Error ? err.message : "Compose failed");
     } finally {
@@ -617,6 +685,14 @@ export default function Home() {
     return matchSearch && matchFilter;
   });
 
+  const lightboxIndex = lightbox ? history.findIndex((img) => img.url === lightbox) : -1;
+
+  function navigateLightbox(delta: number) {
+    if (lightboxIndex === -1) return;
+    const next = lightboxIndex + delta;
+    if (next >= 0 && next < history.length) setLightbox(history[next].url);
+  }
+
   const previewAspect =
     composeAspectRatio !== "auto" ? aspectRatioToNumber(composeAspectRatio) : bgAspect ?? 16 / 9;
 
@@ -628,6 +704,8 @@ export default function Home() {
     setBackgroundPhoto(null);
     setBackgroundPhotoPreview(null);
     setComposeError(null);
+    setSelectMode(false);
+    setSelectedUrls(new Set());
     setActiveTab(tab);
   }
 
@@ -647,6 +725,35 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
     }).catch(() => {});
+  }
+
+  function toggleSelected(url: string) {
+    setSelectedUrls((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  }
+
+  function selectAllVisible(list: GeneratedImage[]) {
+    setSelectedUrls(new Set(list.map((img) => img.url)));
+  }
+
+  function bulkDeleteSelected() {
+    if (selectedUrls.size === 0) return;
+    if (!confirm(`Delete ${selectedUrls.size} image${selectedUrls.size !== 1 ? "s" : ""}? This can't be undone.`)) return;
+    const urls = Array.from(selectedUrls);
+    setHistory((h) => h.filter((x) => !selectedUrls.has(x.url)));
+    urls.forEach((url) => {
+      fetch("/api/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      }).catch(() => {});
+    });
+    setSelectedUrls(new Set());
+    setSelectMode(false);
   }
 
   const errorBox = "text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2 animate-fade-in";
@@ -845,6 +952,25 @@ export default function Home() {
               </div>
 
               <ModelSwitcher value={composeModel} onChange={setComposeModel} models={COMPOSE_MODELS} title="Compose Model" />
+
+              {(() => {
+                const options = getComposeModelConfig(composeModel).supportedResolutions;
+                if (!options) return null;
+                const idx = Math.max(0, options.indexOf(composeResolution));
+                return (
+                  <div className="flex flex-col gap-2">
+                    <label className={label}>
+                      Resolution — <span className="text-orange-400">{options[idx]}</span>
+                    </label>
+                    <input type="range" min={0} max={options.length - 1} step={1} value={idx}
+                      onChange={(e) => setComposeResolution(options[Number(e.target.value)])}
+                      className="w-full" />
+                    <div className="flex justify-between text-[10px] text-zinc-500 px-0.5">
+                      {options.map((o) => <span key={o}>{o}</span>)}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {composeError && <p className={errorBox}>{composeError}</p>}
 
@@ -1096,7 +1222,14 @@ export default function Home() {
                     </div>
                   ) : (
                     <>
-                      <div className="flex justify-end mb-3">
+                      <div className="flex justify-end items-center gap-2 mb-3">
+                        <SelectToolbar
+                          selectMode={selectMode}
+                          selectedCount={selectedUrls.size}
+                          onToggle={() => { setSelectMode((v) => !v); setSelectedUrls(new Set()); }}
+                          onSelectAll={() => selectAllVisible(history)}
+                          onDelete={bulkDeleteSelected}
+                        />
                         <GridSizeSlider columns={galleryColumns} onChange={setGalleryColumns} />
                       </div>
                       <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${galleryColumns}, minmax(0, 1fr))` }}>
@@ -1115,6 +1248,9 @@ export default function Home() {
                           onScene={() => setComposeTarget(img)}
                           onRemove={() => removeFromHistory(img.url)}
                           onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
+                          selectMode={selectMode}
+                          selected={selectedUrls.has(img.url)}
+                          onToggleSelect={() => toggleSelected(img.url)}
                         />
                       ))}
                       </div>
@@ -1263,13 +1399,16 @@ export default function Home() {
                     placeholder="Search prompts..."
                     className="pl-8 pr-4 py-2 text-sm bg-black/[0.035] border border-transparent rounded-full text-zinc-900 placeholder-zinc-500 focus:outline-none focus:bg-white focus:ring-2 focus:ring-orange-400/20 w-52 transition-all duration-200" />
                 </div>
-                {history.length > 0 && <GridSizeSlider columns={galleryColumns} onChange={setGalleryColumns} />}
                 {history.length > 0 && (
-                  <button onClick={() => { if (confirm("Clear all history?")) setHistory([]); }}
-                    className="text-xs text-red-400/70 hover:text-red-400 transition-colors font-medium px-3 py-2 rounded-full hover:bg-red-500/10">
-                    Clear all
-                  </button>
+                  <SelectToolbar
+                    selectMode={selectMode}
+                    selectedCount={selectedUrls.size}
+                    onToggle={() => { setSelectMode((v) => !v); setSelectedUrls(new Set()); }}
+                    onSelectAll={() => selectAllVisible(filteredHistory)}
+                    onDelete={bulkDeleteSelected}
+                  />
                 )}
+                {history.length > 0 && <GridSizeSlider columns={galleryColumns} onChange={setGalleryColumns} />}
               </div>
             </div>
 
@@ -1327,6 +1466,9 @@ export default function Home() {
                     onScene={() => setComposeTarget(img)}
                     onRemove={() => removeFromHistory(img.url)}
                     onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
+                    selectMode={selectMode}
+                    selected={selectedUrls.has(img.url)}
+                    onToggleSelect={() => toggleSelected(img.url)}
                   />
                 ))}
               </div>
@@ -1337,15 +1479,52 @@ export default function Home() {
 
       {/* Lightbox */}
       {lightbox && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-8 animate-fade-in"
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex z-50 animate-fade-in"
           onClick={() => setLightbox(null)}>
-          <button className="absolute top-4 right-4 text-white/60 hover:text-white text-2xl bg-black/[0.06] hover:bg-black/[0.15] w-10 h-10 rounded-full flex items-center justify-center transition-all"
+          <button className="absolute top-4 right-4 text-white/60 hover:text-white text-2xl bg-black/[0.06] hover:bg-black/[0.15] w-10 h-10 rounded-full flex items-center justify-center transition-all z-10"
             onClick={() => setLightbox(null)}>
             ✕
           </button>
-          <Image src={lightbox} alt="Preview" width={1024} height={1024}
-            className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl animate-scale-in"
-            unoptimized priority onClick={(e) => e.stopPropagation()} />
+
+          <button
+            onClick={(e) => { e.stopPropagation(); navigateLightbox(-1); }}
+            disabled={lightboxIndex <= 0}
+            className="absolute left-4 top-1/2 -translate-y-1/2 text-white/60 hover:text-white text-2xl bg-black/[0.06] hover:bg-black/[0.15] disabled:opacity-0 disabled:pointer-events-none w-10 h-10 rounded-full flex items-center justify-center transition-all z-10"
+          >
+            ‹
+          </button>
+
+          <div className="flex-1 flex items-center justify-center p-8 min-w-0">
+            <Image src={lightbox} alt="Preview" width={1024} height={1024}
+              className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl animate-scale-in"
+              unoptimized priority onClick={(e) => e.stopPropagation()} />
+          </div>
+
+          <button
+            onClick={(e) => { e.stopPropagation(); navigateLightbox(1); }}
+            disabled={lightboxIndex === -1 || lightboxIndex >= history.length - 1}
+            className="absolute right-[6.5rem] top-1/2 -translate-y-1/2 text-white/60 hover:text-white text-2xl bg-black/[0.06] hover:bg-black/[0.15] disabled:opacity-0 disabled:pointer-events-none w-10 h-10 rounded-full flex items-center justify-center transition-all z-10"
+          >
+            ›
+          </button>
+
+          {history.length > 0 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-24 flex-shrink-0 h-full overflow-y-auto flex flex-col gap-2 p-3 pt-16"
+            >
+              {history.map((img, i) => (
+                <button key={`${img.url}-${i}`} onClick={() => setLightbox(img.url)}
+                  className={`relative rounded-lg overflow-hidden aspect-square flex-shrink-0 ring-2 transition-all duration-150 ${
+                    img.url === lightbox
+                      ? "ring-orange-400 scale-[1.03]"
+                      : "ring-transparent opacity-60 hover:opacity-100 hover:ring-white/40"
+                  }`}>
+                  <img src={img.url} alt="" className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
