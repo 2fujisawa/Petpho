@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
-import { getModelConfig, buildImageInput, extractImageUrl, DEFAULT_MODEL } from "@/lib/models";
+import { getModelConfig, buildImageInput, extractImageUrl, resolveResolution, DEFAULT_MODEL } from "@/lib/models";
 import { rehostAll, rehostBuffer } from "@/lib/storage";
 
 const replicate = new Replicate({
@@ -12,9 +12,13 @@ async function runWithRetry(
   dataUrl: string,
   aspectRatio: string,
   modelId: string,
+  resolutionChoice: string | undefined,
   retries = 2
 ): Promise<unknown> {
   const config = getModelConfig(modelId);
+  // Omitted entirely for models with no resolution control, so we never send
+  // a param they'd reject.
+  const resolution = resolveResolution(config, resolutionChoice);
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -23,6 +27,7 @@ async function runWithRetry(
           prompt,
           aspect_ratio: aspectRatio,
           output_format: config.outputFormat,
+          ...(resolution ? { resolution } : {}),
           ...config.extraInput,
           ...buildImageInput(config, dataUrl),
         },
@@ -46,6 +51,7 @@ export async function POST(req: NextRequest) {
   const aspectRatio = (formData.get("aspectRatio") as string) || "1:1";
   const numOutputs = parseInt((formData.get("numOutputs") as string) || "1");
   const modelId = (formData.get("model") as string) || DEFAULT_MODEL;
+  const resolution = (formData.get("resolution") as string) || undefined;
   const backgroundPhoto = formData.get("backgroundPhoto");
 
   if (!file || !(file instanceof Blob)) {
@@ -99,7 +105,7 @@ export async function POST(req: NextRequest) {
 
     // Normal single-image flow
     const runs = Array.from({ length: Math.min(numOutputs, 4) }, () =>
-      runWithRetry(promptText, imageUrl, aspectRatio, modelId)
+      runWithRetry(promptText, imageUrl, aspectRatio, modelId, resolution)
     );
     const outputs = await Promise.all(runs);
     const images = await rehostAll(outputs.map(extractImageUrl));

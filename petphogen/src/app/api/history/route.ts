@@ -21,8 +21,10 @@ export async function GET() {
         token: process.env.BLOB_READ_WRITE_TOKEN,
       });
       for (const blob of res.blobs) {
-        // uploads/ holds source pet photos, not generated results
+        // uploads/ holds source pet photos and cutouts/ holds background-removed
+        // working copies — neither is a generated result
         if (blob.pathname.startsWith("petpho/uploads/")) continue;
+        if (blob.pathname.startsWith("petpho/cutouts/")) continue;
         images.push({
           url: blob.url,
           createdAt: new Date(blob.uploadedAt).getTime(),

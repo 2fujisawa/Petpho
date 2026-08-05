@@ -1,1 +1,0 @@
-# Resoltuion adjustment dial

@@ -33,6 +33,16 @@ export const MODELS: ModelConfig[] = [
     outputFormat: "jpg",
   },
   {
+    id: "google/nano-banana-pro",
+    name: "Nano Banana Pro",
+    provider: "Google (Gemini 3 Pro)",
+    description: "Highest quality — the only model with 1K/2K/4K output",
+    imageParam: "image_input",
+    imageIsArray: true,
+    outputFormat: "jpg",
+    supportedResolutions: ["1K", "2K", "4K"],
+  },
+  {
     id: "google/nano-banana",
     name: "Nano Banana",
     provider: "Google (Gemini 2.5)",
@@ -160,10 +170,10 @@ function parseAspectRatio(value: string): number {
   return w && h ? w / h : 1;
 }
 
-// Resolve the resolution value to send for a compose model. Returns undefined
-// when the model has no resolution control, or the choice isn't one of its
-// supported values — the model then falls back to its own default.
-export function resolveComposeResolution(
+// Resolve the resolution value to send for a model. Returns undefined when the
+// model has no resolution control, or the choice isn't one of its supported
+// values — the model then falls back to its own default.
+export function resolveResolution(
   config: ModelConfig,
   userChoice: string | undefined
 ): string | undefined {

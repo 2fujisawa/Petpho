@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
-import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, getComposeModelConfig, type ModelId, type ModelConfig } from "@/lib/models";
+import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, getComposeModelConfig, getModelConfig, type ModelId, type ModelConfig } from "@/lib/models";
 import { PREMADE_BACKGROUNDS } from "@/lib/premadeBackgrounds";
 
 const ASPECT_RATIOS = [
@@ -113,6 +113,196 @@ const InpaintCanvas = forwardRef<
   );
 });
 
+type CutoutRefinerHandle = {
+  toBlob: () => Promise<Blob | null>;
+  reset: () => void;
+};
+
+// Manual touch-up for an automatic cutout: erase leftover background the model
+// missed, or paint back parts of the pet it trimmed off. The untouched original
+// is kept on an offscreen canvas to sample from when restoring.
+const CutoutRefiner = forwardRef<
+  CutoutRefinerHandle,
+  {
+    cutoutUrl: string;
+    originalUrl: string;
+    brushSize: number;
+    tool: "erase" | "restore";
+    zoom: number;
+    onReady?: (w: number, h: number) => void;
+  }
+>(function CutoutRefiner({ cutoutUrl, originalUrl, brushSize, tool, zoom, onReady }, ref) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Created in an effect, not at render — this component still gets SSR'd.
+  const originalRef = useRef<HTMLCanvasElement | null>(null);
+  const scratchRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastRef = useRef<{ x: number; y: number } | null>(null);
+  const [ready, setReady] = useState(false);
+  // Natural pixel size of the cutout — the display size is this times zoom.
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  // Held in a ref so the loader effect doesn't re-run (and re-fetch both
+  // images) every time the parent hands over a fresh inline callback.
+  const onReadyRef = useRef(onReady);
+  useEffect(() => { onReadyRef.current = onReady; });
+
+  function drawCutout(img: HTMLImageElement) {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext("2d")!;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+  }
+
+  useImperativeHandle(ref, () => ({
+    toBlob: () =>
+      new Promise((resolve) => {
+        const c = canvasRef.current;
+        if (!c) return resolve(null);
+        c.toBlob((b) => resolve(b), "image/png");
+      }),
+    reset: () => {
+      const img = document.createElement("img");
+      img.crossOrigin = "anonymous";
+      img.onload = () => drawCutout(img);
+      img.src = cutoutUrl;
+    },
+  }));
+
+  // crossOrigin is required, otherwise the canvas is tainted and toBlob throws.
+  useEffect(() => {
+    setReady(false);
+    let cancelled = false;
+    const cut = document.createElement("img");
+    const orig = document.createElement("img");
+    cut.crossOrigin = "anonymous";
+    orig.crossOrigin = "anonymous";
+
+    let loaded = 0;
+    const onBoth = () => {
+      if (cancelled || ++loaded < 2) return;
+      const c = canvasRef.current;
+      if (!c) return;
+      const w = cut.naturalWidth;
+      const h = cut.naturalHeight;
+      c.width = w;
+      c.height = h;
+      c.getContext("2d")!.drawImage(cut, 0, 0);
+
+      const o = document.createElement("canvas");
+      o.width = w; o.height = h;
+      o.getContext("2d")!.drawImage(orig, 0, 0, w, h);
+      originalRef.current = o;
+
+      const sc = document.createElement("canvas");
+      sc.width = w; sc.height = h;
+      scratchRef.current = sc;
+
+      setDims({ w, h });
+      setReady(true);
+      onReadyRef.current?.(w, h);
+    };
+    cut.onload = onBoth;
+    orig.onload = onBoth;
+    cut.src = cutoutUrl;
+    orig.src = originalUrl;
+    return () => { cancelled = true; };
+  }, [cutoutUrl, originalUrl]);
+
+  function posOf(e: React.PointerEvent<HTMLCanvasElement>) {
+    const c = canvasRef.current!;
+    const r = c.getBoundingClientRect();
+    return {
+      x: ((e.clientX - r.left) / r.width) * c.width,
+      y: ((e.clientY - r.top) / r.height) * c.height,
+      radius: (brushSize / r.width) * c.width,
+    };
+  }
+
+  function stroke(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!drawingRef.current || !ready) return;
+    const c = canvasRef.current!;
+    const ctx = c.getContext("2d")!;
+    const { x, y, radius } = posOf(e);
+    const last = lastRef.current ?? { x, y };
+
+    if (tool === "erase") {
+      ctx.save();
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = radius * 2;
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      // Stroke onto scratch, keep only the original's pixels inside that stroke
+      // (source-in), then lay the result back over the working canvas.
+      const sc = scratchRef.current;
+      const orig = originalRef.current;
+      if (!sc || !orig) return;
+      const sctx = sc.getContext("2d")!;
+      sctx.clearRect(0, 0, sc.width, sc.height);
+      sctx.globalCompositeOperation = "source-over";
+      sctx.lineCap = "round";
+      sctx.lineJoin = "round";
+      sctx.lineWidth = radius * 2;
+      sctx.strokeStyle = "#000";
+      sctx.beginPath();
+      sctx.moveTo(last.x, last.y);
+      sctx.lineTo(x, y);
+      sctx.stroke();
+      sctx.globalCompositeOperation = "source-in";
+      sctx.drawImage(orig, 0, 0);
+      ctx.drawImage(sc, 0, 0);
+    }
+    lastRef.current = { x, y };
+  }
+
+  function endStroke() {
+    drawingRef.current = false;
+    lastRef.current = null;
+  }
+
+  return (
+    // m-auto (not justify-center) so the box stays centred in its scroll parent
+    // without the overflowing edge being clipped when zoomed past the viewport.
+    <div
+      className="relative m-auto flex-shrink-0 rounded-xl overflow-hidden ring-1 ring-black/[0.12]"
+      style={{
+        width: dims ? dims.w * zoom : "100%",
+        height: dims ? dims.h * zoom : 240,
+        backgroundImage:
+          "linear-gradient(45deg,#e4e4e7 25%,transparent 25%),linear-gradient(-45deg,#e4e4e7 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e4e4e7 75%),linear-gradient(-45deg,transparent 75%,#e4e4e7 75%)",
+        backgroundSize: "22px 22px",
+        backgroundPosition: "0 0,0 11px,11px -11px,-11px 0",
+      }}
+    >
+      <canvas
+        ref={canvasRef}
+        className="block w-full h-full cursor-crosshair"
+        style={{ touchAction: "none" }}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          drawingRef.current = true;
+          lastRef.current = null;
+          stroke(e);
+        }}
+        onPointerMove={stroke}
+        onPointerUp={endStroke}
+        onPointerLeave={endStroke}
+      />
+      {!ready && (
+        <div className="absolute inset-0 flex items-center justify-center bg-white/70">
+          <span className="w-6 h-6 border-2 border-orange-500/30 border-t-orange-500 rounded-full animate-spin" />
+        </div>
+      )}
+    </div>
+  );
+});
+
 const label = "text-[11px] font-semibold text-zinc-500 uppercase tracking-[0.14em]";
 const chipOff =
   "bg-black/[0.035] border-transparent text-zinc-600 hover:bg-black/[0.06] hover:text-zinc-800";
@@ -169,6 +359,47 @@ function ModelSwitcher({
             </p>
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+const selectBox =
+  "w-full appearance-none text-xs font-semibold text-zinc-800 bg-black/[0.035] rounded-xl pl-3 pr-7 py-2 cursor-pointer transition-colors hover:bg-black/[0.06] focus:outline-none focus:ring-2 focus:ring-orange-400/30";
+
+function Chevron() {
+  return (
+    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 text-[9px]">
+      ▼
+    </span>
+  );
+}
+
+// Space-efficient stand-in for ModelSwitcher — one row instead of one card per model.
+function ModelDropdown({
+  value, onChange, models, title,
+}: {
+  value: ModelId;
+  onChange: (id: ModelId) => void;
+  models: ModelConfig[];
+  title: string;
+}) {
+  const current = models.find((m) => m.id === value);
+  return (
+    <div className="flex flex-col gap-1.5 min-w-0 flex-1">
+      <label className={label}>{title}</label>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value as ModelId)}
+          title={current ? `${current.provider} — ${current.description}` : undefined}
+          className={selectBox}
+        >
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>{m.name}</option>
+          ))}
+        </select>
+        <Chevron />
       </div>
     </div>
   );
@@ -243,14 +474,10 @@ function SelectToolbar({
   );
 }
 
-const MODEL_BADGE: Record<string, string> = {
-  "black-forest-labs/flux-kontext-pro": "bg-violet-500/20 text-violet-300",
-  "stability-ai/stable-diffusion-3.5-large": "bg-blue-500/20 text-blue-300",
-  "ideogram-ai/ideogram-v2-turbo": "bg-emerald-500/20 text-emerald-300",
-  "google/nano-banana": "bg-amber-500/20 text-amber-300",
-  "qwen/qwen-image-edit-plus": "bg-indigo-500/20 text-indigo-300",
-  "bytedance/seedream-4": "bg-pink-500/20 text-pink-300",
-};
+// Everything that floats over a thumbnail shares one neutral treatment — the
+// badges aren't colour-coded by model any more.
+const overlayChip =
+  "bg-white/15 hover:bg-white/30 backdrop-blur-sm text-white transition-colors";
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
@@ -286,7 +513,6 @@ function ImageCard({
   onToggleSelect?: () => void;
 }) {
   const modelName = MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1];
-  const badgeClass = MODEL_BADGE[img.model] ?? "bg-white/10 text-zinc-700";
   return (
     <div className="break-inside-avoid animate-fade-up" style={{ animationDelay: `${Math.min(index * 35, 350)}ms` }}>
       <div
@@ -331,21 +557,21 @@ function ImageCard({
                 </p>
                 <div className="flex gap-1.5 flex-wrap translate-y-2 group-hover:translate-y-0 transition-transform duration-300 delay-[40ms]">
                   <button onClick={(e) => { e.stopPropagation(); onEdit(); }}
-                    className="text-xs bg-orange-500/95 hover:bg-orange-400 text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
+                    className={`text-xs px-2.5 py-1 rounded-full font-semibold ${overlayChip}`}>
                     ✏️ Edit
                   </button>
                   <button onClick={(e) => { e.stopPropagation(); onScene(); }}
-                    className="text-xs bg-sky-500/95 hover:bg-sky-400 text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
+                    className={`text-xs px-2.5 py-1 rounded-full font-semibold ${overlayChip}`}>
                     🖼️ Scene
                   </button>
                   {img.uploadUrl && (
                     <button onClick={(e) => { e.stopPropagation(); onViewOriginal(); }}
-                      className="text-xs bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white px-2.5 py-1 rounded-full transition-colors font-semibold">
+                      className={`text-xs px-2.5 py-1 rounded-full font-semibold ${overlayChip}`}>
                       🐾 Original
                     </button>
                   )}
                   <a href={img.url} download onClick={(e) => e.stopPropagation()}
-                    className="text-xs bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white w-6 h-6 flex items-center justify-center rounded-full transition-colors">
+                    className={`text-xs w-6 h-6 flex items-center justify-center rounded-full ${overlayChip}`}>
                     ↓
                   </a>
                 </div>
@@ -354,12 +580,12 @@ function ImageCard({
             {/* Badges */}
             <div className="absolute top-2 left-2 right-2 flex justify-between items-start pointer-events-none">
               {img.sourceUrl && !selectMode && (
-                <span className="text-[10px] bg-orange-500/90 backdrop-blur-sm text-white px-2 py-0.5 rounded-full font-semibold">
+                <span className="text-[10px] bg-black/45 backdrop-blur-sm text-white/85 px-2 py-0.5 rounded-full font-semibold opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                   Edited
                 </span>
               )}
               {!selectMode && (
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto backdrop-blur-sm ${badgeClass}`}>
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto backdrop-blur-sm bg-black/45 text-white/85 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                   {modelName}
                 </span>
               )}
@@ -391,7 +617,11 @@ export default function Home() {
   const [bgAspect, setBgAspect] = useState<number | null>(null);
   const [petPos, setPetPos] = useState({ x: 50, y: 65 });
   const [petScale, setPetScale] = useState(35);
+  // Natural width/height of the pet image — needed to work out the box's height
+  // so corner-dragging can scale it without distorting the pet.
+  const [petAspect, setPetAspect] = useState(1);
   const draggingPetRef = useRef(false);
+  const resizeRef = useRef<{ sx: number; sy: number; ax: number; ay: number; ratio: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const [composeTarget, setComposeTarget] = useState<GeneratedImage | null>(null);
   const [composeModel, setComposeModel] = useState<ModelId>(DEFAULT_COMPOSE_MODEL);
@@ -399,6 +629,17 @@ export default function Home() {
   const [composeResolution, setComposeResolution] = useState("2K");
   const [composeLoading, setComposeLoading] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
+  const [removingBg, setRemovingBg] = useState(false);
+  const [refining, setRefining] = useState(false);
+  const [refineTool, setRefineTool] = useState<"erase" | "restore">("erase");
+  const [refineBrush, setRefineBrush] = useState(40);
+  const [savingRefine, setSavingRefine] = useState(false);
+  const [refineZoom, setRefineZoom] = useState(1);
+  const [refineDims, setRefineDims] = useState<{ w: number; h: number } | null>(null);
+  const refineViewRef = useRef<HTMLDivElement>(null);
+  const refinerRef = useRef<CutoutRefinerHandle>(null);
+  // Set once the pet has been cut out — holds the original so it can be restored.
+  const [petOriginalUrl, setPetOriginalUrl] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"generate" | "history">("generate");
   const [historySearch, setHistorySearch] = useState("");
   const [historyFilter, setHistoryFilter] = useState<ModelId | null>(null);
@@ -410,6 +651,7 @@ export default function Home() {
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [numOutputs, setNumOutputs] = useState(1);
   const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
+  const [resolution, setResolution] = useState("2K");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<GeneratedImage[]>([]);
@@ -433,14 +675,20 @@ export default function Home() {
       if (saved) setHistory(JSON.parse(saved));
     } catch {}
 
-    // Merge in blob-stored images so history follows the account, not the browser.
+    // Sync with blob storage so history follows the account, not the browser:
+    // pick up images generated elsewhere, and drop local entries for images
+    // that were deleted elsewhere (otherwise they'd linger here as "Expired").
     fetch("/api/history")
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { images?: { url: string; createdAt: number }[] } | null) => {
-        if (!data?.images?.length) return;
+        if (!data) return;
+        const liveBlobUrls = new Set((data.images ?? []).map((img) => img.url));
         setHistory((prev) => {
-          const known = new Set(prev.map((x) => x.url));
-          const recovered = data.images!
+          const pruned = prev.filter(
+            (x) => !x.url.includes(".public.blob.vercel-storage.com/") || liveBlobUrls.has(x.url)
+          );
+          const known = new Set(pruned.map((x) => x.url));
+          const recovered = (data.images ?? [])
             .filter((img) => !known.has(img.url))
             .map((img) => ({
               url: img.url,
@@ -448,8 +696,8 @@ export default function Home() {
               model: "" as ModelId,
               createdAt: img.createdAt,
             }));
-          if (!recovered.length) return prev;
-          return [...prev, ...recovered].sort(
+          if (pruned.length === prev.length && !recovered.length) return prev;
+          return [...pruned, ...recovered].sort(
             (a, b) => (b.createdAt ?? Infinity) - (a.createdAt ?? Infinity)
           );
         });
@@ -616,6 +864,7 @@ export default function Home() {
       formData.append("aspectRatio", aspectRatio);
       formData.append("numOutputs", String(numOutputs));
       formData.append("model", model);
+      formData.append("resolution", resolution);
 
       const res = await fetch("/api/generate", { method: "POST", body: formData });
       const data = await res.json();
@@ -641,6 +890,139 @@ export default function Home() {
     });
   }
 
+  function openCompose(img: GeneratedImage) {
+    setComposeTarget(img);
+    setPetOriginalUrl(null);
+    setRefining(false);
+    setComposeError(null);
+  }
+
+  // Cutting the pet out first stops its original background from bleeding into
+  // the new scene and fighting the background the user picked.
+  async function handleRemoveBackground() {
+    if (!composeTarget) return;
+    setRemovingBg(true);
+    setComposeError(null);
+    try {
+      const res = await fetch("/api/remove-bg", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl: composeTarget.url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Background removal failed");
+      setPetOriginalUrl(composeTarget.url);
+      setComposeTarget({ ...composeTarget, url: data.url });
+    } catch (err) {
+      setComposeError(err instanceof Error ? err.message : "Background removal failed");
+    } finally {
+      setRemovingBg(false);
+    }
+  }
+
+  // Zoom that makes the whole cutout fit inside the touch-up viewport, so it
+  // opens showing the entire pet instead of a crop of its top edge.
+  function fitRefineZoom(dims: { w: number; h: number } | null) {
+    const el = refineViewRef.current;
+    if (!el || !dims) return 1;
+    const pad = 32;
+    return clamp(
+      Math.min((el.clientWidth - pad) / dims.w, (el.clientHeight - pad) / dims.h),
+      0.05,
+      8
+    );
+  }
+
+  function zoomRefine(factor: number) {
+    setRefineZoom((z) => clamp(z * factor, 0.05, 8));
+  }
+
+  // Ctrl/⌘ + wheel to zoom. Registered natively because React's wheel listener
+  // is passive, so preventDefault there wouldn't stop the browser zooming.
+  useEffect(() => {
+    const el = refineViewRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setRefineZoom((z) => clamp(z * (e.deltaY < 0 ? 1.12 : 0.89), 0.05, 8));
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [refining]);
+
+  async function applyRefinedCutout() {
+    if (!composeTarget) return;
+    const blob = await refinerRef.current?.toBlob();
+    if (!blob) return;
+    setSavingRefine(true);
+    setComposeError(null);
+    try {
+      const fd = new FormData();
+      fd.append("image", blob, "cutout.png");
+      const res = await fetch("/api/upload-cutout", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save your touch-ups");
+      setComposeTarget({ ...composeTarget, url: data.url });
+      setRefining(false);
+    } catch (err) {
+      setComposeError(err instanceof Error ? err.message : "Could not save your touch-ups");
+    } finally {
+      setSavingRefine(false);
+    }
+  }
+
+  function restoreBackground() {
+    if (!composeTarget || !petOriginalUrl) return;
+    setComposeTarget({ ...composeTarget, url: petOriginalUrl });
+    setPetOriginalUrl(null);
+    setRefining(false);
+  }
+
+  // Height of the pet box as a % of stage height. The box is sized by width
+  // (petScale), so height follows from the image's own aspect ratio.
+  function petBoxHeightPct(rect: DOMRect) {
+    const widthPx = (petScale / 100) * rect.width;
+    return ((widthPx / petAspect) / rect.height) * 100;
+  }
+
+  // Corner drag: the opposite corner stays pinned and the box scales uniformly.
+  function startPetResize(e: React.PointerEvent, sx: number, sy: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    const stage = stageRef.current;
+    if (!stage) return;
+    const rect = stage.getBoundingClientRect();
+    const hPct = petBoxHeightPct(rect);
+    resizeRef.current = {
+      sx,
+      sy,
+      ax: petPos.x - (sx * petScale) / 2,
+      ay: petPos.y - (sy * hPct) / 2,
+      ratio: hPct / petScale,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onPetResize(e: React.PointerEvent) {
+    const r = resizeRef.current;
+    const stage = stageRef.current;
+    if (!r || !stage) return;
+    const rect = stage.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * 100;
+    const newW = clamp(Math.abs(px - r.ax), 5, 100);
+    const newH = newW * r.ratio;
+    setPetScale(Math.round(newW));
+    setPetPos({
+      x: clamp(r.ax + (r.sx * newW) / 2, 0, 100),
+      y: clamp(r.ay + (r.sy * newH) / 2, 0, 100),
+    });
+  }
+
+  function endPetResize() {
+    resizeRef.current = null;
+  }
+
   async function handleCompose() {
     if (!composeTarget || !backgroundPhoto) return;
     setComposeLoading(true);
@@ -664,6 +1046,8 @@ export default function Home() {
       }));
       setHistory((h) => [...newImages, ...h]);
       setComposeTarget(null);
+      setPetOriginalUrl(null);
+      setRefining(false);
       setBackgroundPhoto(null);
       setBackgroundPhotoPreview(null);
       setSelectedPremadeBg(null);
@@ -701,12 +1085,17 @@ export default function Home() {
   function navTo(tab: "generate" | "history") {
     setEditor(null);
     setComposeTarget(null);
+    setPetOriginalUrl(null);
+    setRefining(false);
     setBackgroundPhoto(null);
     setBackgroundPhotoPreview(null);
     setComposeError(null);
     setSelectMode(false);
     setSelectedUrls(new Set());
     setActiveTab(tab);
+    // Edit drops you straight into the editor on the newest photo — the grid is
+    // still one click away via "All photos".
+    if (tab === "history" && history.length > 0) openEditor(history[0]);
   }
 
   async function signOut() {
@@ -828,28 +1217,59 @@ export default function Home() {
         {/* COMPOSE VIEW */}
         {composeTarget && (
           <div className="flex-1 flex overflow-hidden animate-fade-in">
-            <aside className={`w-[300px] ${floatCard} flex flex-col gap-5 p-5 overflow-y-auto flex-shrink-0 m-6 mr-3`}>
-              <div className="flex items-center gap-3 pb-1">
+            <aside className={`w-[264px] ${floatCard} flex flex-col gap-4 p-4 overflow-y-auto flex-shrink-0 m-6 mr-3`}>
+              <div className="flex items-center gap-2.5">
                 <button
-                  onClick={() => { setComposeTarget(null); setBackgroundPhoto(null); setBackgroundPhotoPreview(null); setSelectedPremadeBg(null); setBgAspect(null); setComposeError(null); }}
-                  className="w-7 h-7 rounded-full bg-black/[0.04] hover:bg-black/[0.1] text-zinc-600 hover:text-zinc-900 transition-all flex items-center justify-center text-sm"
+                  onClick={() => { setComposeTarget(null); setPetOriginalUrl(null); setRefining(false); setBackgroundPhoto(null); setBackgroundPhotoPreview(null); setSelectedPremadeBg(null); setBgAspect(null); setComposeError(null); }}
+                  className="w-7 h-7 rounded-full bg-black/[0.04] hover:bg-black/[0.1] text-zinc-600 hover:text-zinc-900 transition-all flex items-center justify-center text-sm flex-shrink-0"
                 >
                   ←
                 </button>
                 <span className="font-bold text-zinc-900 text-sm">Place in Scene</span>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <label className={label}>Your Pixar Pet</label>
-                <div className="rounded-2xl overflow-hidden ring-1 ring-black/[0.08]">
-                  <img src={composeTarget.url} alt="Pixar pet" className="w-full h-40 object-cover" />
+              {/* Pet — thumbnail sits inline with its actions to save height */}
+              <div className="flex gap-2.5 flex-shrink-0">
+                <div
+                  className="w-16 h-16 rounded-xl overflow-hidden ring-1 ring-black/[0.08] flex-shrink-0"
+                  style={petOriginalUrl ? {
+                    backgroundImage:
+                      "linear-gradient(45deg,#e4e4e7 25%,transparent 25%),linear-gradient(-45deg,#e4e4e7 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e4e4e7 75%),linear-gradient(-45deg,transparent 75%,#e4e4e7 75%)",
+                    backgroundSize: "12px 12px",
+                    backgroundPosition: "0 0,0 6px,6px -6px,-6px 0",
+                  } : undefined}
+                >
+                  <img src={composeTarget.url} alt="Pixar pet"
+                    className={`w-full h-full ${petOriginalUrl ? "object-contain" : "object-cover"}`} />
+                </div>
+                <div className="flex flex-col gap-1.5 flex-1 min-w-0 justify-center">
+                  {petOriginalUrl ? (
+                    <>
+                      <button onClick={() => setRefining(true)}
+                        className="w-full py-1.5 rounded-full text-xs font-bold border border-transparent bg-orange-500/10 text-orange-600 hover:bg-orange-500/20 transition-all duration-200">
+                        ✏️ Touch up
+                      </button>
+                      <button onClick={restoreBackground} title="Put the original background back"
+                        className={`w-full py-1.5 rounded-full text-xs font-bold border transition-all duration-200 ${chipOff}`}>
+                        ↩ Restore
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={handleRemoveBackground} disabled={removingBg}
+                      title="Cut the pet out so its old background doesn't clash with the new scene"
+                      className="w-full py-2 rounded-full text-xs font-bold border border-transparent bg-orange-500/10 text-orange-600 hover:bg-orange-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2">
+                      {removingBg
+                        ? (<><span className="w-3 h-3 border-2 border-orange-500/40 border-t-orange-500 rounded-full animate-spin" />Removing…</>)
+                        : <>✂️ Remove background</>}
+                    </button>
+                  )}
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <label className={label}>Background Photo</label>
-                  <div className="flex rounded-full bg-black/[0.035] p-0.5 text-[11px] font-semibold">
+              <div className="flex flex-col gap-2 flex-shrink-0">
+                <div className="flex items-center justify-between gap-2">
+                  <label className={`${label} whitespace-nowrap`}>Background</label>
+                  <div className="flex rounded-full bg-black/[0.035] p-0.5 text-[11px] font-semibold flex-shrink-0">
                     <button onClick={() => setBgSourceTab("premade")}
                       className={`px-2.5 py-1 rounded-md transition-all duration-200 ${
                         bgSourceTab === "premade" ? "bg-sky-500 text-white" : "text-zinc-500 hover:text-zinc-700"
@@ -867,6 +1287,10 @@ export default function Home() {
 
                 {bgSourceTab === "premade" ? (
                   PREMADE_BACKGROUNDS.length > 0 ? (
+                    // Scrolls on its own so the ratio/model controls below stay
+                    // put. The cap lives on the wrapper, not the grid, or the
+                    // rows get squashed instead of overflowing.
+                    <div className="max-h-[264px] overflow-y-auto pr-0.5">
                     <div className="grid grid-cols-3 gap-2">
                       {PREMADE_BACKGROUNDS.map((bg) => (
                         <button key={bg.id} onClick={() => selectPremadeBackground(bg)}
@@ -877,6 +1301,7 @@ export default function Home() {
                           <img src={bg.file} alt={bg.name} className="w-full h-full object-cover" />
                         </button>
                       ))}
+                    </div>
                     </div>
                   ) : (
                     <div className="rounded-xl border-2 border-dashed border-black/[0.1] bg-black/[0.02] py-6 px-3 text-center">
@@ -918,66 +1343,66 @@ export default function Home() {
                   }} />
               </div>
 
-              {backgroundPhotoPreview && (
-                <div className="flex flex-col gap-2">
-                  <label className={label}>
-                    Pet Size — <span className="text-orange-400">{petScale}%</span>
-                  </label>
-                  <input type="range" min={10} max={80} value={petScale}
-                    onChange={(e) => setPetScale(Number(e.target.value))}
-                    className="w-full" />
-                  <p className="text-xs text-zinc-600">Drag the pet in the preview to position it</p>
-                </div>
-              )}
-
-              <div className="flex flex-col gap-2">
-                <label className={label}>Output Aspect Ratio</label>
-                <div className="flex flex-wrap gap-2">
+              <div className="flex flex-col gap-1.5 flex-shrink-0">
+                <label className={label}>Output Ratio</label>
+                <div className="flex flex-wrap gap-1.5">
                   <button onClick={() => setComposeAspectRatio("auto")}
-                    className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-all duration-200 ${
+                    title="Match your background photo's shape"
+                    className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-all duration-200 ${
                       composeAspectRatio === "auto" ? chipOn : chipOff
                     }`}>
                     Auto
                   </button>
                   {ASPECT_RATIOS.map((r) => (
                     <button key={r.value} onClick={() => setComposeAspectRatio(r.value)}
-                      className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-all duration-200 ${
+                      className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-all duration-200 ${
                         composeAspectRatio === r.value ? chipOn : chipOff
                       }`}>
                       {r.label}
                     </button>
                   ))}
                 </div>
-                <p className="text-xs text-zinc-600">Auto matches your background photo&apos;s shape</p>
               </div>
 
-              <ModelSwitcher value={composeModel} onChange={setComposeModel} models={COMPOSE_MODELS} title="Compose Model" />
-
-              {(() => {
-                const options = getComposeModelConfig(composeModel).supportedResolutions;
-                if (!options) return null;
-                const idx = Math.max(0, options.indexOf(composeResolution));
-                return (
-                  <div className="flex flex-col gap-2">
-                    <label className={label}>
-                      Resolution — <span className="text-orange-400">{options[idx]}</span>
-                    </label>
-                    <input type="range" min={0} max={options.length - 1} step={1} value={idx}
-                      onChange={(e) => setComposeResolution(options[Number(e.target.value)])}
-                      className="w-full" />
-                    <div className="flex justify-between text-[10px] text-zinc-500 px-0.5">
-                      {options.map((o) => <span key={o}>{o}</span>)}
+              <div className="flex gap-2 items-end flex-shrink-0">
+                <ModelDropdown
+                  value={composeModel}
+                  models={COMPOSE_MODELS}
+                  title="Model"
+                  onChange={(id) => {
+                    setComposeModel(id);
+                    // Keep the resolution on something this model actually offers.
+                    const opts = getComposeModelConfig(id).supportedResolutions;
+                    if (opts && !opts.includes(composeResolution)) setComposeResolution(opts[0]);
+                  }}
+                />
+                {(() => {
+                  const options = getComposeModelConfig(composeModel).supportedResolutions;
+                  if (!options) return null;
+                  return (
+                    <div className="flex flex-col gap-1.5 w-[72px] flex-shrink-0">
+                      <label className={label}>Res</label>
+                      <div className="relative">
+                        <select
+                          value={options.includes(composeResolution) ? composeResolution : options[0]}
+                          onChange={(e) => setComposeResolution(e.target.value)}
+                          className={selectBox}
+                        >
+                          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                        <Chevron />
+                      </div>
                     </div>
-                  </div>
-                );
-              })()}
+                  );
+                })()}
+              </div>
 
               {composeError && <p className={errorBox}>{composeError}</p>}
 
               <button
                 onClick={handleCompose}
                 disabled={composeLoading || !backgroundPhoto}
-                className="w-full py-3 rounded-xl font-bold text-sm transition-all duration-200 shadow-lg shadow-sky-500/25 disabled:opacity-40 disabled:shadow-none disabled:cursor-not-allowed bg-sky-500 hover:bg-sky-400 active:scale-[0.98] text-white flex items-center justify-center gap-2"
+                className="w-full py-2.5 rounded-xl font-bold text-sm transition-all duration-200 shadow-lg shadow-sky-500/25 disabled:opacity-40 disabled:shadow-none disabled:cursor-not-allowed bg-sky-500 hover:bg-sky-400 active:scale-[0.98] text-white flex items-center justify-center gap-2 flex-shrink-0"
               >
                 {composeLoading
                   ? (<><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Composing...</>)
@@ -993,6 +1418,14 @@ export default function Home() {
                     <span className="absolute inset-0 rounded-full animate-glow-pulse" style={{ boxShadow: "0 0 30px rgba(56,189,248,0.3)" }} />
                   </div>
                   <p className="text-sm text-zinc-600">Placing your pet in the scene...</p>
+                </div>
+              ) : removingBg ? (
+                <div className="flex flex-col items-center gap-5 animate-fade-in">
+                  <div className="relative">
+                    <span className="block w-14 h-14 border-4 border-orange-500/20 border-t-orange-400 rounded-full animate-spin" />
+                    <span className="absolute inset-0 rounded-full animate-glow-pulse" />
+                  </div>
+                  <p className="text-sm text-zinc-600">Removing the background...</p>
                 </div>
               ) : backgroundPhotoPreview ? (
                 <div className="flex flex-col items-center gap-3 animate-scale-in w-full">
@@ -1010,39 +1443,95 @@ export default function Home() {
                         setBgAspect(img.naturalWidth / img.naturalHeight);
                       }}
                     />
-                    <img
-                      src={composeTarget.url}
-                      alt="Pixar pet"
-                      draggable={false}
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        e.currentTarget.setPointerCapture(e.pointerId);
-                        draggingPetRef.current = true;
-                      }}
-                      onPointerMove={(e) => {
-                        if (!draggingPetRef.current || !stageRef.current) return;
-                        const rect = stageRef.current.getBoundingClientRect();
-                        const xPct = ((e.clientX - rect.left) / rect.width) * 100;
-                        const yPct = ((e.clientY - rect.top) / rect.height) * 100;
-                        setPetPos({
-                          x: clamp(xPct, 0, 100),
-                          y: clamp(yPct, 0, 100),
-                        });
-                      }}
-                      onPointerUp={() => { draggingPetRef.current = false; }}
-                      className="absolute cursor-grab active:cursor-grabbing drop-shadow-2xl ring-2 ring-orange-400/70 rounded-lg"
+                    <div
+                      className="absolute ring-2 ring-orange-400/70 rounded-lg"
                       style={{
                         left: `${petPos.x}%`,
                         top: `${petPos.y}%`,
                         width: `${petScale}%`,
-                        height: "auto",
                         transform: "translate(-50%, -50%)",
                         touchAction: "none",
                       }}
-                    />
-                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[11px] bg-black/60 backdrop-blur-sm text-white/80 px-3 py-1 rounded-full font-medium pointer-events-none">
-                      Drag the pet to position it
+                    >
+                      <img
+                        src={composeTarget.url}
+                        alt="Pixar pet"
+                        draggable={false}
+                        onLoad={(e) => {
+                          const img = e.currentTarget;
+                          if (img.naturalHeight) setPetAspect(img.naturalWidth / img.naturalHeight);
+                        }}
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.setPointerCapture(e.pointerId);
+                          draggingPetRef.current = true;
+                        }}
+                        onPointerMove={(e) => {
+                          if (!draggingPetRef.current || !stageRef.current) return;
+                          const rect = stageRef.current.getBoundingClientRect();
+                          const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+                          const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+                          setPetPos({
+                            x: clamp(xPct, 0, 100),
+                            y: clamp(yPct, 0, 100),
+                          });
+                        }}
+                        onPointerUp={() => { draggingPetRef.current = false; }}
+                        className="w-full h-auto block cursor-grab active:cursor-grabbing drop-shadow-2xl rounded-lg"
+                        style={{ touchAction: "none" }}
+                      />
+
+                      {/* Corner handles — drag to scale, opposite corner stays put */}
+                      {([[-1, -1], [1, -1], [-1, 1], [1, 1]] as const).map(([sx, sy]) => (
+                        <span
+                          key={`${sx}:${sy}`}
+                          onPointerDown={(e) => startPetResize(e, sx, sy)}
+                          onPointerMove={onPetResize}
+                          onPointerUp={endPetResize}
+                          onPointerCancel={endPetResize}
+                          className="absolute w-3 h-3 bg-white border-2 border-orange-400 rounded-[3px] shadow-sm hover:scale-125 transition-transform"
+                          style={{
+                            left: sx < 0 ? 0 : "100%",
+                            top: sy < 0 ? 0 : "100%",
+                            transform: "translate(-50%, -50%)",
+                            cursor: sx * sy > 0 ? "nwse-resize" : "nesw-resize",
+                            touchAction: "none",
+                          }}
+                        />
+                      ))}
+
+                      <span className="absolute -top-7 left-1/2 -translate-x-1/2 text-[10px] font-semibold bg-orange-500 text-white px-2 py-0.5 rounded-full pointer-events-none whitespace-nowrap">
+                        {petScale}%
+                      </span>
                     </div>
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[11px] bg-black/60 backdrop-blur-sm text-white/80 px-3 py-1 rounded-full font-medium pointer-events-none">
+                      Drag to move · pull a corner to resize
+                    </div>
+                  </div>
+                </div>
+              ) : petOriginalUrl ? (
+                <div className="flex flex-col items-center gap-4 animate-scale-in w-full">
+                  <div
+                    className="rounded-2xl overflow-hidden ring-1 ring-black/[0.1] w-full"
+                    style={{
+                      maxWidth: 460,
+                      backgroundImage:
+                        "linear-gradient(45deg,#e4e4e7 25%,transparent 25%),linear-gradient(-45deg,#e4e4e7 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e4e4e7 75%),linear-gradient(-45deg,transparent 75%,#e4e4e7 75%)",
+                      backgroundSize: "22px 22px",
+                      backgroundPosition: "0 0,0 11px,11px -11px,-11px 0",
+                    }}
+                  >
+                    <img src={composeTarget.url} alt="Pet cutout" className="w-full h-auto" />
+                  </div>
+                  <div className="flex flex-col items-center gap-2">
+                    <p className="text-sm font-medium text-zinc-600">Background removed</p>
+                    <div className="flex gap-2">
+                      <button onClick={() => setRefining(true)}
+                        className="text-xs px-3 py-1.5 rounded-full font-semibold bg-orange-500 text-white hover:bg-orange-400 transition-all duration-200">
+                        ✏️ Touch up
+                      </button>
+                    </div>
+                    <p className="text-xs text-zinc-500">Now pick a background photo on the left</p>
                   </div>
                 </div>
               ) : (
@@ -1059,46 +1548,65 @@ export default function Home() {
         {!composeTarget && editor && (
           <div className="flex-1 flex overflow-hidden animate-fade-in">
 
-            {/* Left panel: source + results */}
-            <div className={`flex flex-col w-[236px] ${floatCard} p-4 gap-4 overflow-y-auto flex-shrink-0 my-6 ml-6`}>
-              <div className="flex items-center gap-3 pb-1">
-                <button onClick={() => setEditor(null)}
-                  className="w-7 h-7 rounded-full bg-black/[0.04] hover:bg-black/[0.1] text-zinc-600 hover:text-zinc-900 transition-all flex items-center justify-center text-sm">
-                  ←
+            {/* Left panel: photo picker + results */}
+            <div className={`flex flex-col w-[236px] ${floatCard} p-4 gap-4 overflow-hidden flex-shrink-0 my-6 ml-6`}>
+              <div className="flex items-center gap-2.5 flex-shrink-0">
+                <span className="font-bold text-zinc-900 text-sm flex-1">Editor</span>
+                <button onClick={() => setEditor(null)} title="Browse all photos in a grid"
+                  className="text-[11px] px-2.5 py-1 rounded-full font-semibold bg-black/[0.035] text-zinc-600 hover:text-zinc-900 hover:bg-black/[0.07] transition-all">
+                  All photos
                 </button>
-                <span className="font-bold text-zinc-900 text-sm">Editor</span>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <label className={label}>Source</label>
-                <div className="rounded-2xl overflow-hidden ring-1 ring-orange-400/30">
-                  <Image src={editor.sourceImage.url} alt="Source" width={320} height={320} className="w-full h-auto object-cover" unoptimized />
+              {/* Switch which photo you're editing without leaving the canvas */}
+              <div className="flex flex-col gap-2 flex-shrink-0">
+                <label className={label}>Photos — {history.length}</label>
+                <div className="max-h-[32vh] overflow-y-auto pr-0.5">
+                <div className="grid grid-cols-2 gap-2">
+                  {history.map((img, i) => {
+                    const active = img.url === editor.sourceImage.url;
+                    return (
+                      <button key={`pick-${img.url}-${i}`}
+                        onClick={() => { if (!active) openEditor(img); }}
+                        title={img.prompt || "Untitled"}
+                        className={`relative rounded-lg overflow-hidden aspect-square bg-black/[0.04] ring-2 transition-all duration-150 ${
+                          active
+                            ? "ring-orange-400"
+                            : "ring-transparent opacity-70 hover:opacity-100 hover:ring-black/15"
+                        }`}>
+                        <img src={img.url} alt="" className="w-full h-full object-cover" />
+                      </button>
+                    );
+                  })}
                 </div>
-                <p className="text-xs text-zinc-500 italic line-clamp-2">&ldquo;{editor.sourceImage.prompt}&rdquo;</p>
+                </div>
+                {editor.sourceImage.prompt && (
+                  <p className="text-xs text-zinc-500 italic line-clamp-2">&ldquo;{editor.sourceImage.prompt}&rdquo;</p>
+                )}
               </div>
 
-              <div className="border-t border-black/[0.05] pt-4 flex flex-col gap-2">
-                <label className={label}>Results{editor.results.length > 0 ? ` — ${editor.results.length}` : ""}</label>
-                {editor.loading && <div className="rounded-2xl skeleton w-full" style={{ aspectRatio: "1/1" }} />}
-                {editor.results.length === 0 && !editor.loading ? (
-                  <p className="text-xs text-zinc-500 leading-relaxed">Brush over the image, describe the change, and results appear here</p>
-                ) : (
-                  <div className="flex flex-col gap-3">
-                    {editor.results.map((img, i) => (
+              <div className="border-t border-black/[0.05] pt-4 flex flex-col gap-2 flex-1 min-h-0">
+                <label className={`${label} flex-shrink-0`}>Results{editor.results.length > 0 ? ` — ${editor.results.length}` : ""}</label>
+                <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pr-0.5">
+                  {editor.loading && <div className="rounded-2xl skeleton w-full flex-shrink-0" style={{ aspectRatio: "1/1" }} />}
+                  {editor.results.length === 0 && !editor.loading ? (
+                    <p className="text-xs text-zinc-500 leading-relaxed">Brush over the image, describe the change, and results appear here</p>
+                  ) : (
+                    editor.results.map((img, i) => (
                       <div key={`${img.url}-${i}`}
-                        className="group relative rounded-2xl overflow-hidden bg-white card-glow cursor-pointer animate-scale-in"
+                        className="group relative rounded-2xl overflow-hidden bg-white card-glow cursor-pointer animate-scale-in flex-shrink-0"
                         onClick={() => setLightbox(img.url)}>
                         <Image src={img.url} alt={img.prompt} width={512} height={512} className="w-full h-auto object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
                         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-2.5 gap-1.5">
                           <div className="flex gap-1.5 flex-wrap">
-                            <button onClick={(e) => { e.stopPropagation(); openEditor(img); }} className="text-[11px] bg-orange-500/95 hover:bg-orange-400 text-white px-2 py-0.5 rounded-full transition-colors font-medium">Edit this</button>
-                            <a href={img.url} download onClick={(e) => e.stopPropagation()} className="text-[11px] bg-white/20 hover:bg-white/35 backdrop-blur-sm text-white px-2 py-0.5 rounded-full transition-colors">↓</a>
+                            <button onClick={(e) => { e.stopPropagation(); openEditor(img); }} className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${overlayChip}`}>Edit this</button>
+                            <a href={img.url} download onClick={(e) => e.stopPropagation()} className={`text-[11px] px-2 py-0.5 rounded-full ${overlayChip}`}>↓</a>
                           </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
+                    ))
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1245,7 +1753,7 @@ export default function Home() {
                           onBroken={() => markBroken(img.url)}
                           onOpen={() => setLightbox(img.url)}
                           onEdit={() => openEditor(img)}
-                          onScene={() => setComposeTarget(img)}
+                          onScene={() => openCompose(img)}
                           onRemove={() => removeFromHistory(img.url)}
                           onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
                           selectMode={selectMode}
@@ -1277,6 +1785,24 @@ export default function Home() {
                             ))}
                           </div>
                         </div>
+                        {(() => {
+                          const options = getModelConfig(model).supportedResolutions;
+                          if (!options) return null;
+                          const idx = Math.max(0, options.indexOf(resolution));
+                          return (
+                            <div className="flex flex-col gap-2 w-28">
+                              <label className={label}>
+                                Resolution — <span className="text-orange-400">{options[idx]}</span>
+                              </label>
+                              <input type="range" min={0} max={options.length - 1} step={1} value={idx}
+                                onChange={(e) => setResolution(options[Number(e.target.value)])}
+                                className="w-full" />
+                              <div className="flex justify-between text-[10px] text-zinc-500 px-0.5">
+                                {options.map((o) => <span key={o}>{o}</span>)}
+                              </div>
+                            </div>
+                          );
+                        })()}
                         <div className="flex flex-col gap-2 w-28">
                           <label className={label}>
                             Images — <span className="text-orange-400">{numOutputs}</span>
@@ -1387,9 +1913,9 @@ export default function Home() {
           <section className="flex-1 overflow-y-auto p-8 animate-fade-in">
             <div className="flex items-start justify-between mb-6 gap-4">
               <div className="animate-slide-in-left">
-                <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">Edit</h2>
+                <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">All photos</h2>
                 <p className="text-sm text-zinc-500 mt-0.5">
-                  {history.length === 0 ? "Generate a photo first" : "Pick a photo below to open it in the editor"}
+                  {history.length === 0 ? "Generate a photo first" : "Pick a photo to open it in the editor"}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -1463,7 +1989,7 @@ export default function Home() {
                     onBroken={() => markBroken(img.url)}
                     onOpen={() => openEditor(img)}
                     onEdit={() => openEditor(img)}
-                    onScene={() => setComposeTarget(img)}
+                    onScene={() => openCompose(img)}
                     onRemove={() => removeFromHistory(img.url)}
                     onViewOriginal={() => img.uploadUrl && setLightbox(img.uploadUrl)}
                     selectMode={selectMode}
@@ -1476,6 +2002,111 @@ export default function Home() {
           </section>
         )}
       </div>
+
+      {/* Cutout touch-up */}
+      {refining && composeTarget && petOriginalUrl && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-50 p-6 animate-fade-in">
+          <div className={`${floatCard} w-full max-w-5xl h-[90vh] p-5 flex flex-col gap-3 animate-scale-in`}>
+            <div className="flex items-center justify-between gap-4 flex-shrink-0">
+              <div>
+                <h3 className="font-bold text-zinc-900 text-sm">Touch up the cutout</h3>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Erase leftover background, or restore parts of the pet that got trimmed
+                </p>
+              </div>
+              <button onClick={() => setRefining(false)}
+                className="w-8 h-8 rounded-full bg-black/[0.04] hover:bg-black/[0.1] text-zinc-600 hover:text-zinc-900 transition-all flex items-center justify-center flex-shrink-0">
+                ✕
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 flex-shrink-0">
+              <div className="flex gap-2">
+                <button onClick={() => setRefineTool("erase")}
+                  className={`px-3 py-2 rounded-full text-xs font-bold border transition-all duration-200 ${refineTool === "erase" ? chipOn : chipOff}`}>
+                  🧽 Erase
+                </button>
+                <button onClick={() => setRefineTool("restore")}
+                  className={`px-3 py-2 rounded-full text-xs font-bold border transition-all duration-200 ${refineTool === "restore" ? chipOn : chipOff}`}>
+                  ↩ Restore
+                </button>
+              </div>
+              <div className="flex flex-col gap-1 w-36">
+                <label className={label}>
+                  Brush — <span className="text-orange-400">{refineBrush}px</span>
+                </label>
+                <input type="range" min={5} max={120} value={refineBrush}
+                  onChange={(e) => setRefineBrush(Number(e.target.value))} className="w-full" />
+              </div>
+
+              {/* Zoom */}
+              <div className="flex items-center gap-1 bg-black/[0.035] rounded-full p-1">
+                <button onClick={() => zoomRefine(1 / 1.25)} title="Zoom out"
+                  className="w-7 h-7 rounded-full text-zinc-600 hover:bg-white hover:text-zinc-900 transition-all flex items-center justify-center text-sm font-bold">
+                  −
+                </button>
+                <span className="text-[11px] font-semibold text-zinc-600 w-11 text-center tabular-nums">
+                  {Math.round(refineZoom * 100)}%
+                </span>
+                <button onClick={() => zoomRefine(1.25)} title="Zoom in"
+                  className="w-7 h-7 rounded-full text-zinc-600 hover:bg-white hover:text-zinc-900 transition-all flex items-center justify-center text-sm font-bold">
+                  +
+                </button>
+                <button onClick={() => setRefineZoom(fitRefineZoom(refineDims))} title="Fit the whole image in view"
+                  className="px-2.5 h-7 rounded-full text-[11px] font-bold text-zinc-600 hover:bg-white hover:text-zinc-900 transition-all">
+                  Fit
+                </button>
+                <button onClick={() => setRefineZoom(1)} title="Actual size"
+                  className="px-2.5 h-7 rounded-full text-[11px] font-bold text-zinc-600 hover:bg-white hover:text-zinc-900 transition-all">
+                  1:1
+                </button>
+              </div>
+
+              <button onClick={() => refinerRef.current?.reset()}
+                className={`px-3 py-2 rounded-full text-xs font-bold border transition-all duration-200 ${chipOff}`}>
+                Reset
+              </button>
+
+              <p className="text-[11px] text-zinc-400 ml-auto hidden sm:block">
+                Scroll to pan · ⌘/Ctrl + scroll to zoom
+              </p>
+            </div>
+
+            <div
+              ref={refineViewRef}
+              className="flex-1 min-h-0 overflow-auto rounded-2xl bg-black/[0.03] ring-1 ring-black/[0.05] flex p-4"
+            >
+              <CutoutRefiner
+                ref={refinerRef}
+                cutoutUrl={composeTarget.url}
+                originalUrl={petOriginalUrl}
+                brushSize={refineBrush}
+                tool={refineTool}
+                zoom={refineZoom}
+                onReady={(w, h) => {
+                  setRefineDims({ w, h });
+                  setRefineZoom(fitRefineZoom({ w, h }));
+                }}
+              />
+            </div>
+
+            {composeError && <p className={`${errorBox} flex-shrink-0`}>{composeError}</p>}
+
+            <div className="flex justify-end gap-2 flex-shrink-0">
+              <button onClick={() => setRefining(false)}
+                className={`px-4 py-2 rounded-full text-xs font-bold border transition-all duration-200 ${chipOff}`}>
+                Cancel
+              </button>
+              <button onClick={applyRefinedCutout} disabled={savingRefine}
+                className="px-4 py-2 rounded-full text-xs font-bold bg-orange-500 text-white hover:bg-orange-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center gap-2">
+                {savingRefine
+                  ? (<><span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />Saving…</>)
+                  : "Apply"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Lightbox */}
       {lightbox && (

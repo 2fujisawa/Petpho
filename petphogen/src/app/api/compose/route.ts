@@ -7,7 +7,7 @@ import {
   buildComposeImageInput,
   extractImageUrl,
   resolveComposeAspectRatio,
-  resolveComposeResolution,
+  resolveResolution,
   DEFAULT_COMPOSE_MODEL,
 } from "@/lib/models";
 
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
     const prompt = `The second image shows a Pixar 3D animated character in full detail — preserve its exact appearance, colors, features, and animation style. The first image is a rough placement composite showing that character pasted onto a background scene at a specific position and size. Blend the character into the scene naturally at that exact position and size: add matching lighting and shadows, smooth the edges, and correct perspective so it looks like a single cohesive Pixar movie still. Do not move, resize, or change the pose of the character from where it appears in the first image. Cinematic quality.`;
 
     const aspectRatio = resolveComposeAspectRatio(config, aspectRatioChoice, bgWidth, bgHeight);
-    const resolution = resolveComposeResolution(config, resolutionChoice);
+    const resolution = resolveResolution(config, resolutionChoice);
 
     const output = await replicate.run(config.id as `${string}/${string}`, {
       input: {
