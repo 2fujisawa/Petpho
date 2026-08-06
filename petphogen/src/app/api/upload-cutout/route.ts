@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { rehostBuffer } from "@/lib/storage";
+import { putBuffer } from "@/lib/storage";
 
 // Stores a hand-refined cutout (brushed in the browser) so compose can
 // reference it by URL like any other image.
@@ -14,8 +14,7 @@ export async function POST(req: NextRequest) {
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
     // Must stay PNG — the whole point is the alpha channel.
-    const url = await rehostBuffer(buffer, "image/png", "cutouts");
-    if (!url) throw new Error("Could not save the cutout");
+    const url = await putBuffer(buffer, "image/png", "cutouts");
     return NextResponse.json({ url });
   } catch (err) {
     console.error("Cutout upload error:", err);

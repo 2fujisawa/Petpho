@@ -155,12 +155,30 @@ const CutoutRefiner = forwardRef<
   }
 
   useImperativeHandle(ref, () => ({
-    toBlob: () =>
-      new Promise((resolve) => {
-        const c = canvasRef.current;
-        if (!c) return resolve(null);
-        c.toBlob((b) => resolve(b), "image/png");
-      }),
+    // Vercel rejects request bodies past ~4.5MB before the route ever runs, and
+    // a browser-encoded 2048px RGBA PNG clears that easily. Shrink until it
+    // fits rather than letting the save fail.
+    toBlob: async () => {
+      const c = canvasRef.current;
+      if (!c) return null;
+      const LIMIT = 4 * 1024 * 1024;
+
+      const encode = (canvas: HTMLCanvasElement) =>
+        new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+
+      let blob = await encode(c);
+      for (const scale of [0.75, 0.55, 0.4, 0.3]) {
+        if (!blob || blob.size <= LIMIT) break;
+        const small = document.createElement("canvas");
+        small.width = Math.round(c.width * scale);
+        small.height = Math.round(c.height * scale);
+        const sctx = small.getContext("2d")!;
+        sctx.imageSmoothingQuality = "high";
+        sctx.drawImage(c, 0, 0, small.width, small.height);
+        blob = await encode(small);
+      }
+      return blob;
+    },
     reset: () => {
       const img = document.createElement("img");
       img.crossOrigin = "anonymous";

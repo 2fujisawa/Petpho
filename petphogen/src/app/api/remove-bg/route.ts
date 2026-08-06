@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import { applyMaskAsAlpha } from "@/lib/cutout";
-import { rehostBuffer } from "@/lib/storage";
+import { putBuffer } from "@/lib/storage";
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
@@ -52,10 +52,7 @@ export async function POST(req: NextRequest) {
     );
 
     // Must stay a PNG — a jpg round-trip would flatten the transparency away.
-    const url = await rehostBuffer(cutout, "image/png", "cutouts");
-    if (!url) {
-      throw new Error("Could not save the cutout");
-    }
+    const url = await putBuffer(cutout, "image/png", "cutouts");
 
     return NextResponse.json({ url });
   } catch (err) {
