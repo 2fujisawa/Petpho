@@ -119,6 +119,59 @@ export function getEditModelConfig(id: string): ModelConfig {
   return EDIT_MODELS.find((m) => m.id === id) ?? EDIT_MODELS[0];
 }
 
+// ── Video ────────────────────────────────────────────────────────────────
+// Seedance animates outward from a still it's given as the first frame, which
+// is exactly the shape of this app — every Pixar pet already in history is a
+// candidate first frame. All three variants share one input schema; the values
+// below are taken from Replicate's published schema for the model, not guessed.
+export type VideoModelId =
+  | "bytedance/seedance-2.0"
+  | "bytedance/seedance-2.0-fast"
+  | "bytedance/seedance-2.0-mini";
+
+export type VideoModelConfig = {
+  id: VideoModelId;
+  name: string;
+  provider: string;
+  description: string;
+};
+
+export const VIDEO_MODELS: VideoModelConfig[] = [
+  {
+    id: "bytedance/seedance-2.0-fast",
+    name: "Seedance 2.0 Fast",
+    provider: "ByteDance",
+    description: "Quicker and cheaper per clip — the sensible default",
+  },
+  {
+    id: "bytedance/seedance-2.0",
+    name: "Seedance 2.0",
+    provider: "ByteDance",
+    description: "Best quality motion and audio, slowest of the three",
+  },
+  {
+    id: "bytedance/seedance-2.0-mini",
+    name: "Seedance 2.0 Mini",
+    provider: "ByteDance",
+    description: "Lowest cost — good for trying an idea before committing",
+  },
+];
+
+export const DEFAULT_VIDEO_MODEL: VideoModelId = "bytedance/seedance-2.0-fast";
+
+export const VIDEO_RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
+export const VIDEO_ASPECT_RATIOS = [
+  "adaptive", "16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "9:21",
+];
+// -1 is the model's "intelligent duration" — it picks the length that suits
+// the prompt. The schema accepts anything from -1 to 15 seconds.
+export const VIDEO_DURATIONS = [-1, 5, 10, 15];
+export const MAX_VIDEO_DURATION = 15;
+
+export function getVideoModelConfig(id: string): VideoModelConfig {
+  return VIDEO_MODELS.find((m) => m.id === id) ?? VIDEO_MODELS[0];
+}
+
 // Models capable of blending two distinct images (subject + background) into one scene
 export const COMPOSE_MODELS: ModelConfig[] = [
   {

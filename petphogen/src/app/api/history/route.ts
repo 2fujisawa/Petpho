@@ -7,12 +7,13 @@ import { NextResponse } from "next/server";
 // lives in localStorage and is lost on a different device.
 export async function GET() {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return NextResponse.json({ images: [], uploads: [] });
+    return NextResponse.json({ images: [], uploads: [], videos: [] });
   }
 
   try {
     const images: { url: string; createdAt: number }[] = [];
     const uploads: { url: string; createdAt: number }[] = [];
+    const videos: { url: string; createdAt: number }[] = [];
     let cursor: string | undefined;
 
     do {
@@ -38,6 +39,12 @@ export async function GET() {
         if (blob.pathname.startsWith("petpho/uploads/")) continue;
         // cutouts/ holds background-removed working copies — internal only
         if (blob.pathname.startsWith("petpho/cutouts/")) continue;
+        // videos/ is its own tab; an .mp4 in the image grid would render as a
+        // permanently broken thumbnail.
+        if (blob.pathname.startsWith("petpho/videos/")) {
+          videos.push({ url: blob.url, createdAt });
+          continue;
+        }
         images.push({ url: blob.url, createdAt });
       }
       cursor = res.cursor;
@@ -45,9 +52,10 @@ export async function GET() {
 
     images.sort((a, b) => b.createdAt - a.createdAt);
     uploads.sort((a, b) => b.createdAt - a.createdAt);
-    return NextResponse.json({ images, uploads });
+    videos.sort((a, b) => b.createdAt - a.createdAt);
+    return NextResponse.json({ images, uploads, videos });
   } catch (err) {
     console.error("history list failed:", err);
-    return NextResponse.json({ images: [], uploads: [] });
+    return NextResponse.json({ images: [], uploads: [], videos: [] });
   }
 }

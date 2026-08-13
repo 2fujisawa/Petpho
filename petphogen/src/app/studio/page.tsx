@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
-import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, EDIT_MODELS, DEFAULT_EDIT_MODEL, getComposeModelConfig, getEditModelConfig, getModelConfig, type ModelId, type ModelConfig } from "@/lib/models";
+import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, EDIT_MODELS, DEFAULT_EDIT_MODEL, getComposeModelConfig, getEditModelConfig, getModelConfig, VIDEO_MODELS, DEFAULT_VIDEO_MODEL, VIDEO_RESOLUTIONS, VIDEO_ASPECT_RATIOS, VIDEO_DURATIONS, getVideoModelConfig, type ModelId, type ModelConfig, type VideoModelId } from "@/lib/models";
 import { PREMADE_BACKGROUNDS } from "@/lib/premadeBackgrounds";
 
 const ASPECT_RATIOS = [
@@ -85,6 +85,24 @@ type EditJob = {
   id: string;
   thumbnailUrl: string;
   model: ModelId;
+  error?: string;
+};
+
+type GeneratedVideo = {
+  url: string;
+  prompt: string;
+  model: VideoModelId;
+  // The still it was animated from, when it wasn't plain text-to-video.
+  sourceUrl?: string;
+  createdAt?: number;
+};
+
+// Same shape and reasoning as EditJob — a clip takes minutes, so it has to keep
+// running while you queue more, switch tabs, or go back to editing.
+type VideoJob = {
+  id: string;
+  thumbnailUrl?: string;
+  model: VideoModelId;
   error?: string;
 };
 
@@ -878,7 +896,7 @@ export default function Home() {
   // switching tabs and away from Compose — reopening the same photo restores
   // the already-removed background instead of asking to redo the work.
   const [cutoutCache, setCutoutCache] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState<"generate" | "history" | "originals">("generate");
+  const [activeTab, setActiveTab] = useState<"generate" | "history" | "originals" | "video">("generate");
   // Source pet photos, listed from blob storage rather than derived from
   // history's uploadUrl — that field only exists for images generated in this
   // browser, so it misses everything created on another device.
@@ -943,6 +961,19 @@ export default function Home() {
   const editorViewRef = useRef<HTMLElement>(null);
   const historyInitialSaveSkipped = useRef(false);
   const cutoutCacheInitialSaveSkipped = useRef(false);
+  // ── Video (Seedance) ──
+  const [videos, setVideos] = useState<GeneratedVideo[]>([]);
+  const [videoJobs, setVideoJobs] = useState<VideoJob[]>([]);
+  const [videoSourceUrl, setVideoSourceUrl] = useState<string | null>(null);
+  const [videoPrompt, setVideoPrompt] = useState("");
+  const [videoModel, setVideoModel] = useState<VideoModelId>(DEFAULT_VIDEO_MODEL);
+  const [videoDuration, setVideoDuration] = useState(5);
+  const [videoResolution, setVideoResolution] = useState("720p");
+  const [videoAspect, setVideoAspect] = useState("adaptive");
+  const [videoAudio, setVideoAudio] = useState(true);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const videosInitialSaveSkipped = useRef(false);
+
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
   const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
@@ -957,6 +988,12 @@ export default function Home() {
       if (saved) setHistory(JSON.parse(saved));
     } catch {}
 
+    try {
+      const savedVideos = localStorage.getItem("petpho-videos");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (savedVideos) setVideos(JSON.parse(savedVideos));
+    } catch {}
+
     // Sync with blob storage so history follows the account, not the browser:
     // pick up images generated elsewhere, and drop local entries for images
     // that were deleted elsewhere (otherwise they'd linger here as "Expired").
@@ -965,9 +1002,33 @@ export default function Home() {
       .then((data: {
         images?: { url: string; createdAt: number }[];
         uploads?: { url: string; createdAt: number }[];
+        videos?: { url: string; createdAt: number }[];
       } | null) => {
         if (!data) return;
         setOriginalUploads(data.uploads ?? []);
+
+        // Same reconcile as history below: keep the local entries (they carry
+        // the prompt and model, which storage doesn't), drop ones deleted
+        // elsewhere, and adopt clips generated on another device.
+        setVideos((prev) => {
+          const live = new Set((data.videos ?? []).map((v) => v.url));
+          const pruned = prev.filter(
+            (v) => !v.url.includes(".public.blob.vercel-storage.com/") || live.has(v.url)
+          );
+          const known = new Set(pruned.map((v) => v.url));
+          const recovered = (data.videos ?? [])
+            .filter((v) => !known.has(v.url))
+            .map((v) => ({
+              url: v.url,
+              prompt: "",
+              model: "" as VideoModelId,
+              createdAt: v.createdAt,
+            }));
+          if (pruned.length === prev.length && !recovered.length) return prev;
+          return [...pruned, ...recovered].sort(
+            (a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)
+          );
+        });
         const liveBlobUrls = new Set((data.images ?? []).map((img) => img.url));
         setHistory((prev) => {
           const pruned = prev.filter(
@@ -1002,6 +1063,14 @@ export default function Home() {
     }
     persistJson("petpho-history", history, (h: GeneratedImage[], keep) => h.slice(0, keep));
   }, [history]);
+
+  useEffect(() => {
+    if (!videosInitialSaveSkipped.current) {
+      videosInitialSaveSkipped.current = true;
+      return;
+    }
+    persistJson("petpho-videos", videos, (v: GeneratedVideo[], keep) => v.slice(0, keep));
+  }, [videos]);
 
   // Cutout cache was in-memory only — it didn't survive a page refresh (or a
   // dev-server hot reload), which looked like "the removed background didn't
@@ -1604,7 +1673,74 @@ export default function Home() {
 
   const sidebarActive = composeTarget || editor ? "history" : activeTab;
 
-  function navTo(tab: "generate" | "history" | "originals") {
+  // Fire-and-forget, exactly like handleApplyInpaint: a clip takes minutes, so
+  // everything the request needs is captured up front and the call is decoupled
+  // from the UI. Queue several, change the settings, leave the tab — each one
+  // finishes on its own and lands in the Video gallery.
+  function handleGenerateVideo() {
+    if (!videoPrompt.trim()) return;
+
+    const snapshot = {
+      imageUrl: videoSourceUrl,
+      prompt: videoPrompt,
+      model: videoModel,
+      duration: videoDuration,
+      resolution: videoResolution,
+      aspectRatio: videoAspect,
+      generateAudio: videoAudio,
+    };
+    const job: VideoJob = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      thumbnailUrl: snapshot.imageUrl ?? undefined,
+      model: snapshot.model,
+    };
+
+    setVideoJobs((jobs) => [job, ...jobs]);
+    setVideoError(null);
+    setVideoPrompt("");
+
+    (async () => {
+      try {
+        const res = await fetch("/api/video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(snapshot),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Video generation failed");
+
+        setVideos((prev) => [
+          {
+            url: data.url,
+            prompt: snapshot.prompt,
+            model: snapshot.model,
+            sourceUrl: snapshot.imageUrl ?? undefined,
+            createdAt: Date.now(),
+          },
+          ...prev,
+        ]);
+        setVideoJobs((jobs) => jobs.filter((j) => j.id !== job.id));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Video generation failed";
+        // Kept in the job tile rather than a banner, so a failure from one clip
+        // can't be mistaken for a failure of the one still running.
+        setVideoJobs((jobs) =>
+          jobs.map((j) => (j.id === job.id ? { ...j, error: message } : j))
+        );
+      }
+    })();
+  }
+
+  async function removeVideo(url: string) {
+    setVideos((prev) => prev.filter((v) => v.url !== url));
+    await fetch("/api/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }).catch(() => {});
+  }
+
+  function navTo(tab: "generate" | "history" | "originals" | "video") {
     setEditor(null);
     setComposeTarget(null);
     setPetOriginalUrl(null);
@@ -1709,6 +1845,7 @@ export default function Home() {
             { id: "generate" as const, icon: "✨", name: "Create" },
             { id: "history" as const, icon: "🎨", name: "Edit" },
             { id: "originals" as const, icon: "🐾", name: "Originals" },
+            { id: "video" as const, icon: "🎬", name: "Video" },
           ]).map((item) => {
             const active = sidebarActive === item.id;
             return (
@@ -1726,11 +1863,16 @@ export default function Home() {
                 </span>
                 <span className="text-[13px] font-medium flex-1">{item.name}</span>
                 {((item.id === "history" && history.length > 0) ||
-                  (item.id === "originals" && originalPhotos.length > 0)) && (
+                  (item.id === "originals" && originalPhotos.length > 0) ||
+                  (item.id === "video" && videos.length + videoJobs.length > 0)) && (
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold transition-colors duration-200 ${
                     active ? "bg-orange-400/15 text-orange-500" : "bg-black/[0.05] text-zinc-500"
                   }`}>
-                    {item.id === "history" ? history.length : originalPhotos.length}
+                    {item.id === "history"
+                      ? history.length
+                      : item.id === "originals"
+                      ? originalPhotos.length
+                      : videos.length + videoJobs.length}
                   </span>
                 )}
               </button>
@@ -2202,7 +2344,7 @@ export default function Home() {
             </div>
 
             {/* Right panel: photo picker + tools */}
-            <div className={`flex flex-col w-[236px] ${floatCard} p-4 gap-5 overflow-y-auto flex-shrink-0 my-6 mr-6`}>
+            <div className={`flex flex-col w-[300px] ${floatCard} p-4 gap-5 overflow-y-auto flex-shrink-0 my-6 mr-6`}>
               <div className="flex items-center gap-2.5">
                 <span className="font-bold text-zinc-900 text-sm flex-1">Editor</span>
                 <button onClick={() => setEditor(null)} title="Browse all photos in a grid"
@@ -2219,7 +2361,9 @@ export default function Home() {
                     <span className="text-orange-400"> · {editJobs.length} generating</span>
                   )}
                 </label>
-                <div className="max-h-[22vh] overflow-y-auto pr-0.5">
+                <div className="max-h-[26vh] overflow-y-auto pr-0.5">
+                {/* Stays 2-up on the widened panel so the thumbnails get
+                    bigger rather than the panel just fitting more of them in. */}
                 <div className="grid grid-cols-2 gap-2">
                   {editJobs.map((job) => (
                     <div key={job.id}
@@ -2802,6 +2946,256 @@ export default function Home() {
               </div>
             )}
           </section>
+        )}
+
+        {/* VIDEO TAB — Seedance 2.0 animates a still into a clip */}
+        {!composeTarget && !editor && activeTab === "video" && (
+          <div className="flex-1 flex overflow-hidden animate-fade-in">
+
+            {/* Gallery */}
+            <section className="flex-1 overflow-y-auto p-8">
+              <div className="mb-6 animate-slide-in-left">
+                <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">Video</h2>
+                <p className="text-sm text-zinc-500 mt-0.5">
+                  {videos.length === 0 && videoJobs.length === 0
+                    ? "Bring a Pixar pet to life — pick a photo, describe the motion"
+                    : `${videos.length} clip${videos.length === 1 ? "" : "s"}${
+                        videoJobs.length ? ` · ${videoJobs.length} generating` : ""
+                      }`}
+                </p>
+              </div>
+
+              {videos.length === 0 && videoJobs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-32 gap-4">
+                  <div className="animate-float logo-glow">
+                    <Image src="/logo.png" alt="Petpho mascot" width={120} height={120} className="w-28 h-28" />
+                  </div>
+                  <p className="text-base font-semibold text-zinc-700">No videos yet</p>
+                  <p className="text-sm text-zinc-600">
+                    Choose a first frame on the right and describe what should happen 🎬
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-4 items-start"
+                  style={{ gridTemplateColumns: `repeat(${Math.max(2, galleryColumns - 2)}, minmax(0, 1fr))` }}>
+                  {videoJobs.map((job) => (
+                    <div key={`vjob-${job.id}`}
+                      title={job.error ?? `Generating with ${getVideoModelConfig(job.model).name}…`}
+                      onClick={() => { if (job.error) setVideoJobs((jobs) => jobs.filter((j) => j.id !== job.id)); }}
+                      className={`relative rounded-2xl overflow-hidden bg-white card-glow ring-2 aspect-video ${
+                        job.error ? "ring-red-400 cursor-pointer" : "ring-orange-300/60"
+                      }`}>
+                      {job.thumbnailUrl && (
+                        <img src={job.thumbnailUrl} alt="" className="w-full h-full object-cover opacity-30" />
+                      )}
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/[0.03]">
+                        {job.error ? (
+                          <>
+                            <span className="text-red-500 text-2xl font-bold leading-none">!</span>
+                            <span className="text-[11px] text-red-500 font-semibold px-4 text-center leading-snug">
+                              {job.error}
+                            </span>
+                            <span className="text-[10px] text-zinc-500">Click to dismiss</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="w-7 h-7 border-2 border-orange-400/40 border-t-orange-400 rounded-full animate-spin" />
+                            <span className="text-[11px] font-semibold text-zinc-600">Generating…</span>
+                            <span className="text-[10px] text-zinc-500">This takes a few minutes</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {videos.map((video, i) => (
+                    <div key={`video-${video.url}`}
+                      className="animate-fade-up group relative rounded-2xl overflow-hidden bg-black card-glow"
+                      style={{ animationDelay: `${Math.min(i * 35, 350)}ms` }}>
+                      {/* No autoplay: several clips with audio all starting at
+                          once on tab open would be unusable. */}
+                      <video src={video.url} controls playsInline preload="metadata"
+                        className="w-full h-auto block" />
+                      <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        <button onClick={() => downloadImage(video.url)} title="Download this clip"
+                          className={`text-xs w-7 h-7 flex items-center justify-center rounded-full ${overlayChip}`}>
+                          ↓
+                        </button>
+                        <button onClick={() => removeVideo(video.url)} title="Delete this clip"
+                          className={`text-xs w-7 h-7 flex items-center justify-center rounded-full ${overlayChip}`}>
+                          ✕
+                        </button>
+                      </div>
+                      {(video.prompt || formatDate(video.createdAt)) && (
+                        <div className="px-3 py-2 bg-white">
+                          {video.prompt && (
+                            <p className="text-[11px] text-zinc-600 leading-snug line-clamp-2">{video.prompt}</p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1">
+                            {video.model && (
+                              <span className="text-[10px] text-zinc-500 font-medium">
+                                {getVideoModelConfig(video.model).name}
+                              </span>
+                            )}
+                            {formatDate(video.createdAt) && (
+                              <span className="text-[10px] text-zinc-400">{formatDate(video.createdAt)}</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* Controls — same width as the editor's panel */}
+            <div className={`flex flex-col w-[300px] ${floatCard} p-4 gap-5 overflow-y-auto flex-shrink-0 my-6 mr-6`}>
+              <div className="flex items-center gap-2.5">
+                <span className="font-bold text-zinc-900 text-sm flex-1">New video</span>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className={label}>First frame — optional</label>
+                <div className="max-h-[26vh] overflow-y-auto pr-0.5">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setVideoSourceUrl(null)}
+                      title="Generate from the prompt alone, with no starting image"
+                      className={`relative rounded-lg aspect-square ring-2 flex flex-col items-center justify-center gap-1 transition-all duration-150 ${
+                        videoSourceUrl === null
+                          ? "ring-orange-400 bg-orange-50"
+                          : "ring-transparent bg-black/[0.04] hover:ring-black/15"
+                      }`}>
+                      <span className="text-lg leading-none">✏️</span>
+                      <span className="text-[10px] font-semibold text-zinc-600">Text only</span>
+                    </button>
+                    {history.map((img, i) => {
+                      const active = img.url === videoSourceUrl;
+                      return (
+                        <button key={`vpick-${img.url}-${i}`}
+                          onClick={() => setVideoSourceUrl(img.url)}
+                          title={img.prompt || "Untitled"}
+                          className={`relative rounded-lg overflow-hidden aspect-square bg-black/[0.04] ring-2 transition-all duration-150 ${
+                            active
+                              ? "ring-orange-400"
+                              : "ring-transparent opacity-70 hover:opacity-100 hover:ring-black/15"
+                          }`}>
+                          <img src={img.url} alt="" className="w-full h-full object-cover" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className={label}>Model</label>
+                <div className="relative">
+                  <select value={videoModel}
+                    onChange={(e) => setVideoModel(e.target.value as VideoModelId)}
+                    className={selectBox}>
+                    {VIDEO_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                  <Chevron />
+                </div>
+                <p className="text-[11px] text-zinc-500 leading-snug">
+                  {getVideoModelConfig(videoModel).description}
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                  <label className={label}>Length</label>
+                  <div className="relative">
+                    <select value={videoDuration}
+                      onChange={(e) => setVideoDuration(Number(e.target.value))}
+                      className={selectBox}>
+                      {VIDEO_DURATIONS.map((d) => (
+                        <option key={d} value={d}>{d === -1 ? "Auto" : `${d}s`}</option>
+                      ))}
+                    </select>
+                    <Chevron />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                  <label className={label}>Quality</label>
+                  <div className="relative">
+                    <select value={videoResolution}
+                      onChange={(e) => setVideoResolution(e.target.value)}
+                      className={selectBox}>
+                      {VIDEO_RESOLUTIONS.map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                    <Chevron />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className={label}>Shape</label>
+                <div className="relative">
+                  <select value={videoAspect}
+                    onChange={(e) => setVideoAspect(e.target.value)}
+                    className={selectBox}>
+                    {VIDEO_ASPECT_RATIOS.map((r) => (
+                      <option key={r} value={r}>{r === "adaptive" ? "Match first frame" : r}</option>
+                    ))}
+                  </select>
+                  <Chevron />
+                </div>
+              </div>
+
+              <button
+                onClick={() => setVideoAudio((v) => !v)}
+                title="Seedance can generate synchronised sound effects, music and dialogue"
+                className={`w-full py-2 rounded-full text-xs font-bold border transition-all duration-200 ${
+                  videoAudio ? chipOn : chipOff
+                }`}>
+                {videoAudio ? "🔊 Audio on" : "🔇 Audio off"}
+              </button>
+
+              <div className="border-t border-black/[0.05] pt-4 flex flex-col gap-2">
+                <label className={label}>Prompt</label>
+                {videoError && <p className={errorBox}>{videoError}</p>}
+                <div className="relative">
+                  <textarea value={videoPrompt}
+                    onChange={(e) => setVideoPrompt(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGenerateVideo(); } }}
+                    placeholder="Describe the motion — e.g. the puppy trots toward the camera, tail wagging…"
+                    rows={4}
+                    className="w-full bg-black/[0.035] rounded-xl text-sm p-3 pr-9 resize-none focus:outline-none focus:ring-2 focus:ring-orange-400/20 placeholder-zinc-500 text-zinc-900" />
+                  <button
+                    type="button"
+                    onClick={() => toggleDictation(
+                      (t) => setVideoPrompt((p) => (p ? `${p} ${t}` : t)),
+                      () => setVideoError("Voice input isn't supported in this browser — try Chrome"),
+                    )}
+                    title={listening ? "Stop listening" : "Dictate your prompt"}
+                    className={`absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 ${
+                      listening
+                        ? "bg-red-500 text-white animate-pulse"
+                        : "bg-black/[0.05] text-zinc-500 hover:text-zinc-800"
+                    }`}>
+                    <MicIcon />
+                  </button>
+                </div>
+                {videoAudio && (
+                  <p className="text-[11px] text-zinc-500 leading-snug">
+                    Put spoken lines in &quot;double quotes&quot; and they&apos;ll be voiced.
+                  </p>
+                )}
+                <button onClick={handleGenerateVideo} disabled={!videoPrompt.trim()}
+                  title="Runs in the background — you can queue another straight away"
+                  className="btn-primary w-full py-2.5 rounded-xl font-bold text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none flex items-center justify-center gap-2">
+                  🎬 Generate Video
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

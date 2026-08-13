@@ -92,6 +92,33 @@ export async function rehostGeneratedBuffer(buffer: Buffer, contentType: string)
   }
 }
 
+// Videos get their own prefix so /api/history can list them separately, and so
+// an .mp4 can never fall through into the image gallery. Unlike rehost(), the
+// extension is fixed rather than derived — Seedance always returns MP4, and a
+// video mislabelled .jpg won't play in a <video> tag.
+export async function rehostVideo(replicateUrl: string): Promise<string> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return replicateUrl;
+
+  try {
+    const res = await fetch(replicateUrl);
+    if (!res.ok) return replicateUrl;
+
+    const buffer = await res.arrayBuffer();
+    const filename = `petpho/videos/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+    const { url } = await put(filename, buffer, {
+      access: "public",
+      contentType: res.headers.get("content-type") || "video/mp4",
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+    });
+    return url;
+  } catch (err) {
+    // Worth surfacing: the clip still plays from the Replicate URL, but that
+    // link expires, so the user needs to know it wasn't archived.
+    console.error("rehostVideo:", err);
+    return replicateUrl;
+  }
+}
+
 export async function rehostBuffer(
   buffer: Buffer,
   contentType: string,
