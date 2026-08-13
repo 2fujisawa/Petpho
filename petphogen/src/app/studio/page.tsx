@@ -1701,17 +1701,35 @@ export default function Home() {
 
     (async () => {
       try {
+        // Start the render, then poll. The request that starts it returns in a
+        // second or two — deliberately not held open for the whole render,
+        // which routinely outlasts the hosting platform's function timeout.
         const res = await fetch("/api/video", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(snapshot),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Video generation failed");
+        const started = await res.json();
+        if (!res.ok) throw new Error(started.error || "Video generation failed");
+
+        let data: { status?: string; url?: string; error?: string } = {};
+        const deadline = Date.now() + 30 * 60 * 1000; // give up after 30 min
+        for (;;) {
+          if (Date.now() > deadline) {
+            throw new Error("Timed out waiting for the video — check Replicate for the result.");
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          const poll = await fetch(`/api/video?id=${encodeURIComponent(started.id)}`);
+          data = await poll.json();
+          if (data.status === "succeeded") break;
+          if (!poll.ok || data.status === "failed") {
+            throw new Error(data.error || "Video generation failed");
+          }
+        }
 
         setVideos((prev) => [
           {
-            url: data.url,
+            url: data.url!,
             prompt: snapshot.prompt,
             model: snapshot.model,
             sourceUrl: snapshot.imageUrl ?? undefined,
@@ -1762,6 +1780,16 @@ export default function Home() {
   }
 
   function markBroken(url: string) {
+    // A blob URL that won't load is usually a transient network blip, so keep
+    // the card and let the user decide. A non-blob URL is a different story: it
+    // means archiving to storage failed at generation time and this is a raw
+    // Replicate link, which expires after about an hour and can never come
+    // back. Nothing is recoverable there, so drop it instead of leaving an
+    // "Expired" tombstone the user has to clear by hand.
+    if (!url.includes(".public.blob.vercel-storage.com/")) {
+      setHistory((h) => h.filter((x) => x.url !== url));
+      return;
+    }
     setBrokenImages((prev) => new Set(prev).add(url));
   }
 

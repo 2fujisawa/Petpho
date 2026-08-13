@@ -1,28 +1,50 @@
 import { put } from "@vercel/blob";
 
+// Copies a freshly generated image out of Replicate and into Blob.
+//
+// This matters more than it looks: Replicate's own output URLs expire after
+// about an hour. Any time this falls back to returning the Replicate URL, the
+// client happily saves it to history as though it were permanent, and it turns
+// into a dead "Expired" card that can never be recovered — the bytes are gone.
+// So: retry before giving up, and always say loudly when it didn't work, rather
+// than failing silently the way this used to.
 export async function rehost(replicateUrl: string): Promise<string> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return replicateUrl;
-
-  try {
-    const res = await fetch(replicateUrl);
-    if (!res.ok) return replicateUrl;
-
-    const buffer = await res.arrayBuffer();
-    const contentType = res.headers.get("content-type") || "image/jpeg";
-    const ext = contentType.includes("png") ? "png" : "jpg";
-    const filename = `petpho/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-
-    // Explicit token: with BLOB_STORE_ID set, the SDK otherwise prefers OIDC
-    // auth, which is not enabled for local development.
-    const { url } = await put(filename, buffer, {
-      access: "public",
-      contentType,
-      token: process.env.BLOB_READ_WRITE_TOKEN,
-    });
-    return url;
-  } catch {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    console.error("rehost: BLOB_READ_WRITE_TOKEN missing — image will expire in ~1h");
     return replicateUrl;
   }
+
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(replicateUrl);
+      if (!res.ok) throw new Error(`source fetch failed: ${res.status}`);
+
+      const buffer = await res.arrayBuffer();
+      const contentType = res.headers.get("content-type") || "image/jpeg";
+      const ext = contentType.includes("png") ? "png" : "jpg";
+      const filename = `petpho/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+      // Explicit token: with BLOB_STORE_ID set, the SDK otherwise prefers OIDC
+      // auth, which is not enabled for local development.
+      const { url } = await put(filename, buffer, {
+        access: "public",
+        contentType,
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+      });
+      return url;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 500));
+    }
+  }
+
+  console.error(
+    `rehost: FAILED to archive ${replicateUrl} after 3 attempts — this image will ` +
+      `expire in ~1h and show as "Expired".`,
+    lastErr
+  );
+  return replicateUrl;
 }
 
 export async function rehostAll(urls: string[]): Promise<string[]> {
@@ -96,27 +118,38 @@ export async function rehostGeneratedBuffer(buffer: Buffer, contentType: string)
 // an .mp4 can never fall through into the image gallery. Unlike rehost(), the
 // extension is fixed rather than derived — Seedance always returns MP4, and a
 // video mislabelled .jpg won't play in a <video> tag.
-export async function rehostVideo(replicateUrl: string): Promise<string> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return replicateUrl;
+// `archived` false means the clip is playable right now but will expire — the
+// caller passes that on so the UI can say so instead of silently handing the
+// user a link that dies within the hour.
+export async function rehostVideo(
+  replicateUrl: string
+): Promise<{ url: string; archived: boolean }> {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(replicateUrl);
+        if (!res.ok) throw new Error(`source fetch failed: ${res.status}`);
 
-  try {
-    const res = await fetch(replicateUrl);
-    if (!res.ok) return replicateUrl;
-
-    const buffer = await res.arrayBuffer();
-    const filename = `petpho/videos/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-    const { url } = await put(filename, buffer, {
-      access: "public",
-      contentType: res.headers.get("content-type") || "video/mp4",
-      token: process.env.BLOB_READ_WRITE_TOKEN,
-    });
-    return url;
-  } catch (err) {
-    // Worth surfacing: the clip still plays from the Replicate URL, but that
-    // link expires, so the user needs to know it wasn't archived.
-    console.error("rehostVideo:", err);
-    return replicateUrl;
+        const buffer = await res.arrayBuffer();
+        const filename = `petpho/videos/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+        const { url } = await put(filename, buffer, {
+          access: "public",
+          contentType: res.headers.get("content-type") || "video/mp4",
+          token: process.env.BLOB_READ_WRITE_TOKEN,
+        });
+        return { url, archived: true };
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 500));
+      }
+    }
+    console.error(`rehostVideo: FAILED to archive after 3 attempts — clip will expire`, lastErr);
+  } else {
+    console.error("rehostVideo: BLOB_READ_WRITE_TOKEN missing — clip will expire");
   }
+
+  return { url: replicateUrl, archived: false };
 }
 
 export async function rehostBuffer(
