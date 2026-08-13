@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
-import sharp from "sharp";
+import sharp from "@/lib/sharpConfig";
 import { rehostAll } from "@/lib/storage";
+import { runModel, describeModelError } from "@/lib/replicateRun";
 import {
   getComposeModelConfig,
   buildComposeImageInput,
@@ -79,23 +80,20 @@ export async function POST(req: NextRequest) {
     const aspectRatio = resolveComposeAspectRatio(config, aspectRatioChoice, bgWidth, bgHeight);
     const resolution = resolveResolution(config, resolutionChoice);
 
-    const output = await replicate.run(config.id as `${string}/${string}`, {
-      input: {
-        prompt,
-        output_format: config.outputFormat,
-        ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
-        ...(resolution ? { resolution } : {}),
-        ...config.extraInput,
-        ...buildComposeImageInput(config, [uploadedComposite.urls.get, sourceImageUrl]),
-      },
+    const output = await runModel(replicate, config.id, {
+      prompt,
+      output_format: config.outputFormat,
+      ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+      ...(resolution ? { resolution } : {}),
+      ...config.extraInput,
+      ...buildComposeImageInput(config, [uploadedComposite.urls.get, sourceImageUrl]),
     });
 
     const images = await rehostAll([extractImageUrl(output)]);
     return NextResponse.json({ images });
   } catch (err) {
     console.error("Compose error:", err);
-    const message = err instanceof Error ? err.message : "Compose failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: describeModelError(err, config.name) }, { status: 500 });
   } finally {
     if (uploadedComposite) {
       await replicate.files.delete(uploadedComposite.id).catch(() => {});

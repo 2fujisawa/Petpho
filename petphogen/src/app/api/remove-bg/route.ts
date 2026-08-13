@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import { applyMaskAsAlpha } from "@/lib/cutout";
 import { putBuffer } from "@/lib/storage";
+import { runModel, describeModelError } from "@/lib/replicateRun";
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
@@ -27,12 +28,10 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const output = await replicate.run(GROUNDED_SAM, {
-      input: {
-        image: imageUrl,
-        mask_prompt: MASK_PROMPT,
-        negative_mask_prompt: "",
-      },
+    const output = await runModel(replicate, GROUNDED_SAM, {
+      image: imageUrl,
+      mask_prompt: MASK_PROMPT,
+      negative_mask_prompt: "",
     });
 
     const urls = (Array.isArray(output) ? output : [output]).map(String);
@@ -57,7 +56,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ url });
   } catch (err) {
     console.error("Background removal error:", err);
-    const message = err instanceof Error ? err.message : "Background removal failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: describeModelError(err, "Background removal") },
+      { status: 500 }
+    );
   }
 }

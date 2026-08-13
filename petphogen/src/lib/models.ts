@@ -20,6 +20,11 @@ export type ModelConfig = {
   // Enum of resolution values this model accepts (e.g. ["1K", "2K", "4K"]).
   // Omitted for models with no resolution control.
   supportedResolutions?: string[];
+  // True only for models that take a real black-and-white mask and repaint
+  // exactly that region. Everything else is an instruction editor: it rewrites
+  // the whole image from the prompt, so the brushed region can only be passed
+  // as a visual hint, never enforced.
+  usesMask?: boolean;
 };
 
 export const MODELS: ModelConfig[] = [
@@ -41,15 +46,6 @@ export const MODELS: ModelConfig[] = [
     imageIsArray: true,
     outputFormat: "jpg",
     supportedResolutions: ["1K", "2K", "4K"],
-  },
-  {
-    id: "google/nano-banana",
-    name: "Nano Banana",
-    provider: "Google (Gemini 2.5)",
-    description: "Conversational editing — great at following natural language",
-    imageParam: "image_input",
-    imageIsArray: true,
-    outputFormat: "jpg",
   },
   {
     id: "openai/gpt-image-2",
@@ -76,6 +72,51 @@ export function buildImageInput(
   return {
     [config.imageParam]: config.imageIsArray ? [imageValue] : imageValue,
   };
+}
+
+// Models offered in the inpaint editor. Only Flux Fill Pro repaints strictly
+// inside the brushed mask; the others are far stronger at inventing new objects
+// but rewrite the whole frame, so the brush is passed to them as a marked-up
+// reference image instead of an enforced boundary.
+export const EDIT_MODELS: ModelConfig[] = [
+  {
+    id: "black-forest-labs/flux-fill-pro",
+    name: "Flux Fill Pro",
+    provider: "Black Forest Labs",
+    description: "Repaints exactly inside your brush — best for touch-ups & removals",
+    imageParam: "image",
+    imageIsArray: false,
+    outputFormat: "jpg",
+    usesMask: true,
+  },
+  {
+    id: "google/nano-banana-pro",
+    name: "Nano Banana Pro",
+    provider: "Google (Gemini 3 Pro)",
+    description: "Much better at adding new objects — edits the whole frame from your description",
+    imageParam: "image_input",
+    imageIsArray: true,
+    outputFormat: "jpg",
+    supportedAspectRatios: ["match_input_image", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+    supportedResolutions: ["1K", "2K", "4K"],
+  },
+  {
+    id: "openai/gpt-image-2",
+    name: "GPT Image 2",
+    provider: "OpenAI",
+    description: "Strong instruction-following for complex object edits",
+    imageParam: "input_images",
+    imageIsArray: true,
+    outputFormat: "jpeg",
+    extraInput: { background: "opaque" },
+    supportedAspectRatios: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
+  },
+];
+
+export const DEFAULT_EDIT_MODEL: ModelId = "black-forest-labs/flux-fill-pro";
+
+export function getEditModelConfig(id: string): ModelConfig {
+  return EDIT_MODELS.find((m) => m.id === id) ?? EDIT_MODELS[0];
 }
 
 // Models capable of blending two distinct images (subject + background) into one scene
@@ -110,7 +151,7 @@ export const COMPOSE_MODELS: ModelConfig[] = [
     imageIsArray: true,
     outputFormat: "jpeg",
     extraInput: { background: "opaque" },
-    supportedAspectRatios: ["1:1", "3:2", "2:3", "16:9", "9:16"],
+    supportedAspectRatios: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
   },
 ];
 

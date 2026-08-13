@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { SESSION_COOKIE, sessionToken, safeEqual } from "@/lib/session";
 
-const SESSION_COOKIE = "petpho-session";
-
-export function proxy(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Always allow the login page and auth API through
@@ -10,13 +9,17 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const session = req.cookies.get(SESSION_COOKIE);
+  const session = req.cookies.get(SESSION_COOKIE)?.value;
+  const password = process.env.ADMIN_PASSWORD;
   const isValid =
-    session?.value &&
-    process.env.ADMIN_PASSWORD &&
-    session.value === process.env.ADMIN_PASSWORD;
+    !!session && !!password && safeEqual(session, await sessionToken(password));
 
   if (!isValid) {
+    // API routes get a clean 401 rather than an HTML login page, which a fetch
+    // would otherwise try to parse as JSON and fail on confusingly.
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    }
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);

@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import sharp from "./sharpConfig";
 
 // Grounding DINO sometimes latches onto fragments of neighbouring objects (a
 // prop the pet is holding, a shadow blob). Anything far smaller than the main

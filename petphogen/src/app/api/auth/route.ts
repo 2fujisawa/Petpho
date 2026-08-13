@@ -1,16 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
+import { SESSION_COOKIE, sessionToken, safeEqual } from "@/lib/session";
 
-const SESSION_COOKIE = "petpho-session";
+// Best-effort throttle. Serverless instances are short-lived so this isn't a
+// hard guarantee, but it turns an unlimited online guessing loop into a slow
+// one, which is the difference that matters for a single shared password.
+const MAX_ATTEMPTS = 8;
+const WINDOW_MS = 10 * 60 * 1000;
+const attempts = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = attempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > MAX_ATTEMPTS;
+}
 
 export async function POST(req: NextRequest) {
   const { password } = await req.json();
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
 
-  if (!process.env.ADMIN_PASSWORD || password !== process.env.ADMIN_PASSWORD) {
+  if (rateLimited(ip)) {
+    return NextResponse.json(
+      { error: "Too many attempts. Try again in a few minutes." },
+      { status: 429 }
+    );
+  }
+
+  const expected = process.env.ADMIN_PASSWORD;
+  if (!expected || typeof password !== "string" || !safeEqual(password, expected)) {
     return NextResponse.json({ error: "Incorrect password" }, { status: 401 });
   }
 
+  attempts.delete(ip);
+
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, password, {
+  res.cookies.set(SESSION_COOKIE, await sessionToken(expected), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

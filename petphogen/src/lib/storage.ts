@@ -37,7 +37,7 @@ export async function rehostAll(urls: string[]): Promise<string[]> {
 export async function putBuffer(
   buffer: Buffer,
   contentType: string,
-  folder: "uploads" | "cutouts" = "uploads"
+  folder: "uploads" | "cutouts" | "originals" = "uploads"
 ): Promise<string> {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     throw new Error("Storage is not configured (BLOB_READ_WRITE_TOKEN is missing)");
@@ -72,10 +72,30 @@ export async function putBuffer(
   throw new Error(`Upload to storage failed (${sizeMb}MB): ${detail}`);
 }
 
+// Same top-level path scheme as rehost() (so it shows up in /api/history like
+// any other generated result, unlike putBuffer's uploads/cutouts subfolders),
+// but takes an already-in-memory buffer instead of fetching a source URL —
+// for results that were transformed locally (e.g. resized) before storing.
+export async function rehostGeneratedBuffer(buffer: Buffer, contentType: string): Promise<string | null> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return null;
+  try {
+    const ext = contentType.includes("png") ? "png" : "jpg";
+    const filename = `petpho/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { url } = await put(filename, buffer, {
+      access: "public",
+      contentType,
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+    });
+    return url;
+  } catch {
+    return null;
+  }
+}
+
 export async function rehostBuffer(
   buffer: Buffer,
   contentType: string,
-  folder: "uploads" | "cutouts" = "uploads"
+  folder: "uploads" | "cutouts" | "originals" = "uploads"
 ): Promise<string | null> {
   try {
     return await putBuffer(buffer, contentType, folder);

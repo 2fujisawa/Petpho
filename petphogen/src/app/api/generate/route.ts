@@ -2,46 +2,35 @@ import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import { getModelConfig, buildImageInput, extractImageUrl, resolveResolution, DEFAULT_MODEL } from "@/lib/models";
 import { rehostAll, rehostBuffer } from "@/lib/storage";
+import { runModel, describeModelError } from "@/lib/replicateRun";
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
 });
 
-async function runWithRetry(
+// Retry/backoff lives in runModel — this used to match only on "429", which
+// never fires for the capacity failure providers actually send back
+// ("ModelRateLimitError … E003"), so the retry was effectively dead code.
+function runOne(
   prompt: string,
   dataUrl: string,
   aspectRatio: string,
   modelId: string,
-  resolutionChoice: string | undefined,
-  retries = 2
+  resolutionChoice: string | undefined
 ): Promise<unknown> {
   const config = getModelConfig(modelId);
   // Omitted entirely for models with no resolution control, so we never send
   // a param they'd reject.
   const resolution = resolveResolution(config, resolutionChoice);
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await replicate.run(modelId as `${string}/${string}`, {
-        input: {
-          prompt,
-          aspect_ratio: aspectRatio,
-          output_format: config.outputFormat,
-          ...(resolution ? { resolution } : {}),
-          ...config.extraInput,
-          ...buildImageInput(config, dataUrl),
-        },
-      });
-    } catch (err: unknown) {
-      const isRateLimit =
-        err instanceof Error && err.message.includes("429");
-      if (isRateLimit && attempt < retries) {
-        await new Promise((r) => setTimeout(r, 12000));
-        continue;
-      }
-      throw err;
-    }
-  }
+  return runModel(replicate, modelId, {
+    prompt,
+    aspect_ratio: aspectRatio,
+    output_format: config.outputFormat,
+    ...(resolution ? { resolution } : {}),
+    ...config.extraInput,
+    ...buildImageInput(config, dataUrl),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -49,7 +38,12 @@ export async function POST(req: NextRequest) {
   const file = formData.get("photo");
   const prompt = formData.get("prompt");
   const aspectRatio = (formData.get("aspectRatio") as string) || "1:1";
-  const numOutputs = parseInt((formData.get("numOutputs") as string) || "1");
+  // A blank or non-numeric value used to yield NaN, which made Array.from
+  // produce an empty run list — a 200 response with zero images and no error.
+  const requestedOutputs = Number.parseInt(String(formData.get("numOutputs") ?? "1"), 10);
+  const numOutputs = Number.isFinite(requestedOutputs)
+    ? Math.min(Math.max(requestedOutputs, 1), 4)
+    : 1;
   const modelId = (formData.get("model") as string) || DEFAULT_MODEL;
   const resolution = (formData.get("resolution") as string) || undefined;
   const backgroundPhoto = formData.get("backgroundPhoto");
@@ -64,6 +58,19 @@ export async function POST(req: NextRequest) {
   const mimeType = file.type || "image/jpeg";
   const buffer = Buffer.from(await file.arrayBuffer());
 
+  // What gets kept in the Originals library. The `photo` field has already been
+  // downscaled and padded onto an aspect-ratio canvas for the model, so archive
+  // the untouched upload when the client sends it and only fall back otherwise.
+  const originalPhoto = formData.get("originalPhoto");
+  const hasOriginal =
+    originalPhoto instanceof Blob &&
+    originalPhoto.size > 0 &&
+    originalPhoto.size <= 12 * 1024 * 1024;
+  const archiveBuffer = hasOriginal
+    ? Buffer.from(await (originalPhoto as Blob).arrayBuffer())
+    : buffer;
+  const archiveType = hasOriginal ? (originalPhoto as Blob).type || "image/jpeg" : mimeType;
+
   const promptText = prompt
     ? `Disney Pixar 3D animated style, ${String(prompt).trim()}, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality`
     : "Transform into Disney Pixar 3D animated style, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality";
@@ -74,7 +81,10 @@ export async function POST(req: NextRequest) {
   try {
     const [uploadedFileResult, uploadUrl] = await Promise.all([
       replicate.files.create(new Blob([buffer], { type: mimeType })),
-      rehostBuffer(buffer, mimeType),
+      // Genuine full-size reference photos go in originals/. Without one, all
+      // we have is the padded canvas built for the model — still worth keeping,
+      // but it isn't the user's photo, so it stays out of the Originals tab.
+      rehostBuffer(archiveBuffer, archiveType, hasOriginal ? "originals" : "uploads"),
     ]);
     uploadedFile = uploadedFileResult;
     const imageUrl = uploadedFile.urls.get;
@@ -88,14 +98,12 @@ export async function POST(req: NextRequest) {
 
       const bgPrompt = `Disney Pixar 3D animated style. Take the pet animal from the first image and transform it into a Pixar 3D animated character with big expressive eyes, smooth render, and vibrant colors. Place the Pixar pet sitting naturally inside the scene shown in the second image. Keep the background exactly as shown in the second image. Cinematic lighting, Pixar movie quality.`;
 
-      const runs = Array.from({ length: Math.min(numOutputs, 4) }, () =>
-        replicate.run("google/nano-banana" as `${string}/${string}`, {
-          input: {
-            image_input: [imageUrl, uploadedBackground!.urls.get],
-            prompt: bgPrompt,
-            aspect_ratio: aspectRatio,
-            output_format: "jpg",
-          },
+      const runs = Array.from({ length: numOutputs }, () =>
+        runModel(replicate, "google/nano-banana", {
+          image_input: [imageUrl, uploadedBackground!.urls.get],
+          prompt: bgPrompt,
+          aspect_ratio: aspectRatio,
+          output_format: "jpg",
         })
       );
       const outputs = await Promise.all(runs);
@@ -104,8 +112,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Normal single-image flow
-    const runs = Array.from({ length: Math.min(numOutputs, 4) }, () =>
-      runWithRetry(promptText, imageUrl, aspectRatio, modelId, resolution)
+    const runs = Array.from({ length: numOutputs }, () =>
+      runOne(promptText, imageUrl, aspectRatio, modelId, resolution)
     );
     const outputs = await Promise.all(runs);
     const images = await rehostAll(outputs.map(extractImageUrl));
@@ -113,8 +121,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ images, uploadUrl });
   } catch (err) {
     console.error("Replicate error:", err);
-    const message =
-      err instanceof Error ? err.message : "Image generation failed.";
+    const message = describeModelError(err, getModelConfig(modelId).name);
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
     await Promise.all([
