@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import sharp from "@/lib/sharpConfig";
 import { rehostAll } from "@/lib/storage";
-import { runModel, describeModelError } from "@/lib/replicateRun";
+import { runModel, describeModelError, isTransientModelError } from "@/lib/replicateRun";
 import {
   getComposeModelConfig,
   buildComposeImageInput,
@@ -10,6 +10,7 @@ import {
   resolveComposeAspectRatio,
   resolveResolution,
   DEFAULT_COMPOSE_MODEL,
+  type ModelConfig,
 } from "@/lib/models";
 
 const replicate = new Replicate({
@@ -77,17 +78,32 @@ export async function POST(req: NextRequest) {
 
     const prompt = `The second image shows a Pixar 3D animated character in full detail — preserve its exact appearance, colors, features, and animation style. The first image is a rough placement composite showing that character pasted onto a background scene at a specific position and size. Blend the character into the scene naturally at that exact position and size: add matching lighting and shadows, smooth the edges, and correct perspective so it looks like a single cohesive Pixar movie still. Do not move, resize, or change the pose of the character from where it appears in the first image. Cinematic quality.`;
 
-    const aspectRatio = resolveComposeAspectRatio(config, aspectRatioChoice, bgWidth, bgHeight);
-    const resolution = resolveResolution(config, resolutionChoice);
+    const runCompose = (cfg: ModelConfig) => {
+      const aspectRatio = resolveComposeAspectRatio(cfg, aspectRatioChoice, bgWidth, bgHeight);
+      const resolution = resolveResolution(cfg, resolutionChoice);
+      return runModel(replicate, cfg.id, {
+        prompt,
+        output_format: cfg.outputFormat,
+        ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+        ...(resolution ? { [cfg.resolutionParam ?? "resolution"]: resolution } : {}),
+        ...cfg.extraInput,
+        ...buildComposeImageInput(cfg, [uploadedComposite!.urls.get, sourceImageUrl]),
+      });
+    };
 
-    const output = await runModel(replicate, config.id, {
-      prompt,
-      output_format: config.outputFormat,
-      ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
-      ...(resolution ? { resolution } : {}),
-      ...config.extraInput,
-      ...buildComposeImageInput(config, [uploadedComposite.urls.get, sourceImageUrl]),
-    });
+    let output: unknown;
+    try {
+      output = await runCompose(config);
+    } catch (err) {
+      if (!isTransientModelError(err)) throw err;
+      // Capacity crunches are provider-wide, so the rescue model must come
+      // from a different provider than the one that just failed.
+      const fallback = getComposeModelConfig(
+        config.id === "openai/gpt-image-2" ? "google/nano-banana-pro" : "openai/gpt-image-2"
+      );
+      console.warn(`${config.id} at capacity — falling back to ${fallback.id}`);
+      output = await runCompose(fallback);
+    }
 
     const images = await rehostAll([extractImageUrl(output)]);
     return NextResponse.json({ images });

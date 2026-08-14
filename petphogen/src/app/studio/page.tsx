@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
 import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, EDIT_MODELS, DEFAULT_EDIT_MODEL, getComposeModelConfig, getEditModelConfig, getModelConfig, VIDEO_MODELS, DEFAULT_VIDEO_MODEL, VIDEO_RESOLUTIONS, VIDEO_ASPECT_RATIOS, VIDEO_DURATIONS, getVideoModelConfig, type ModelId, type ModelConfig, type VideoModelId } from "@/lib/models";
 import { PREMADE_BACKGROUNDS } from "@/lib/premadeBackgrounds";
+import { STYLES, DEFAULT_STYLE, getStyleConfig, type StyleId } from "@/lib/styles";
 
 const ASPECT_RATIOS = [
   { label: "1:1", value: "1:1" },
@@ -911,6 +912,7 @@ export default function Home() {
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [numOutputs, setNumOutputs] = useState(1);
   const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
+  const [artStyle, setArtStyle] = useState<StyleId>(DEFAULT_STYLE);
   const [resolution, setResolution] = useState("2K");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1333,6 +1335,7 @@ export default function Home() {
       formData.append("aspectRatio", aspectRatio);
       formData.append("numOutputs", String(numOutputs));
       formData.append("model", model);
+      formData.append("style", artStyle);
       formData.append("resolution", resolution);
 
       const res = await fetch("/api/generate", { method: "POST", body: formData });
@@ -1342,7 +1345,7 @@ export default function Home() {
       const now = Date.now();
       const uploadUrl = data.uploadUrl as string | undefined;
       const newImages: GeneratedImage[] = (data.images as string[]).map((url) => ({
-        url, prompt: prompt || "Pixar style", model, createdAt: now, uploadUrl,
+        url, prompt: prompt || `${getStyleConfig(artStyle).name} style`, model, createdAt: now, uploadUrl,
       }));
       setHistory((prev) => [...newImages, ...prev]);
     } catch (err) {
@@ -1370,7 +1373,9 @@ export default function Home() {
   function openCompose(img: GeneratedImage) {
     const cachedCutout = cutoutCache[img.url];
     setComposeTarget(cachedCutout ? { ...img, url: cachedCutout } : img);
-    setPetOriginalUrl(cachedCutout ?? null);
+    // The restore target is the *original* photo, never the cutout — pointing
+    // it at the cutout made Restore a no-op for cached cutouts.
+    setPetOriginalUrl(cachedCutout ? img.url : null);
     setRefining(false);
     setComposeError(null);
   }
@@ -1468,6 +1473,13 @@ export default function Home() {
   function restoreBackground() {
     if (!composeTarget || !petOriginalUrl) return;
     setComposeTarget({ ...composeTarget, url: petOriginalUrl });
+    // Drop the cached cutout too — otherwise reopening this photo in Compose
+    // would auto-apply it again, undoing the restore the user just asked for.
+    setCutoutCache((c) => {
+      const rest = { ...c };
+      delete rest[petOriginalUrl];
+      return rest;
+    });
     setPetOriginalUrl(null);
     setRefining(false);
   }
@@ -2651,7 +2663,25 @@ export default function Home() {
                 <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-[min(700px,calc(100%-3rem))] z-30 flex flex-col gap-3">
                   {showGenSettings && (
                     <div className={`${floatCard} p-4 flex flex-col gap-4 animate-scale-in`}>
-                      <ModelSwitcher value={model} onChange={setModel} compact />
+                      <ModelSwitcher value={model} onChange={(id) => {
+                        setModel(id);
+                        // Keep the resolution on something this model actually offers.
+                        const opts = getModelConfig(id).supportedResolutions;
+                        if (opts && !opts.includes(resolution)) setResolution(opts[0]);
+                      }} compact />
+                      <div className="flex flex-col gap-2">
+                        <label className={label}>Art Style</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {STYLES.map((s) => (
+                            <button key={s.id} onClick={() => setArtStyle(s.id)} title={s.description}
+                              className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-all duration-200 ${
+                                artStyle === s.id ? chipOn : chipOff
+                              }`}>
+                              {s.emoji} {s.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
                         <div className="flex flex-col gap-2">
                           <label className={label}>Aspect Ratio</label>
@@ -2667,13 +2697,14 @@ export default function Home() {
                           </div>
                         </div>
                         {(() => {
-                          const options = getModelConfig(model).supportedResolutions;
+                          const cfg = getModelConfig(model);
+                          const options = cfg.supportedResolutions;
                           if (!options) return null;
                           const idx = Math.max(0, options.indexOf(resolution));
                           return (
                             <div className="flex flex-col gap-2 w-28">
                               <label className={label}>
-                                Resolution — <span className="text-orange-400">{options[idx]}</span>
+                                {cfg.resolutionParam === "quality" ? "Quality" : "Resolution"} — <span className="text-orange-400">{options[idx]}</span>
                               </label>
                               <input type="range" min={0} max={options.length - 1} step={1} value={idx}
                                 onChange={(e) => setResolution(options[Number(e.target.value)])}
@@ -2748,7 +2779,7 @@ export default function Home() {
 
                     <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGenerate(); } }}
-                      placeholder={photo ? "Describe your Pixar scene… (optional)" : "Upload or paste a pet photo, then describe the scene…"}
+                      placeholder={photo ? `Describe your ${getStyleConfig(artStyle).name} scene… (optional)` : "Upload or paste a pet photo, then describe the scene…"}
                       rows={1}
                       className="flex-1 bg-transparent text-sm px-2 py-2.5 resize-none focus:outline-none placeholder-zinc-500 text-zinc-900" />
 
@@ -2777,7 +2808,7 @@ export default function Home() {
                       }`}>
                       <MicIcon />
                     </button>
-                    <button onClick={handleGenerate} disabled={loading || !photo} title="Generate Pixar Art"
+                    <button onClick={handleGenerate} disabled={loading || !photo} title={`Generate ${getStyleConfig(artStyle).name} Art`}
                       className="btn-primary w-10 h-10 rounded-full font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none flex items-center justify-center flex-shrink-0">
                       {loading
                         ? <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />

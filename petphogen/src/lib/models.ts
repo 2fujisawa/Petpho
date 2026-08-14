@@ -1,7 +1,6 @@
 export type ModelId =
   | "black-forest-labs/flux-kontext-pro"
   | "black-forest-labs/flux-fill-pro"
-  | "google/nano-banana"
   | "google/nano-banana-pro"
   | "openai/gpt-image-2";
 
@@ -20,6 +19,9 @@ export type ModelConfig = {
   // Enum of resolution values this model accepts (e.g. ["1K", "2K", "4K"]).
   // Omitted for models with no resolution control.
   supportedResolutions?: string[];
+  // Input field the resolution choice is sent as. Defaults to "resolution";
+  // gpt-image-2 exposes its equivalent knob as "quality" (low/medium/high).
+  resolutionParam?: string;
   // True only for models that take a real black-and-white mask and repaint
   // exactly that region. Everything else is an instruction editor: it rewrites
   // the whole image from the prompt, so the brushed region can only be passed
@@ -56,6 +58,8 @@ export const MODELS: ModelConfig[] = [
     imageIsArray: true,
     outputFormat: "jpeg",
     extraInput: { background: "opaque" },
+    supportedResolutions: ["low", "medium", "high"],
+    resolutionParam: "quality",
   },
 ];
 
@@ -186,16 +190,6 @@ export const COMPOSE_MODELS: ModelConfig[] = [
     supportedResolutions: ["1K", "2K", "4K"],
   },
   {
-    id: "google/nano-banana",
-    name: "Nano Banana",
-    provider: "Google (Gemini 2.5)",
-    description: "Faster & cheaper, slightly less polished blending",
-    imageParam: "image_input",
-    imageIsArray: true,
-    outputFormat: "jpg",
-    supportedAspectRatios: ["match_input_image", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
-  },
-  {
     id: "openai/gpt-image-2",
     name: "GPT Image 2",
     provider: "OpenAI",
@@ -205,6 +199,8 @@ export const COMPOSE_MODELS: ModelConfig[] = [
     outputFormat: "jpeg",
     extraInput: { background: "opaque" },
     supportedAspectRatios: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
+    supportedResolutions: ["low", "medium", "high"],
+    resolutionParam: "quality",
   },
 ];
 

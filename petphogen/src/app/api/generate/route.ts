@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
-import { getModelConfig, buildImageInput, extractImageUrl, resolveResolution, DEFAULT_MODEL } from "@/lib/models";
+import {
+  getModelConfig,
+  buildImageInput,
+  extractImageUrl,
+  resolveResolution,
+  DEFAULT_MODEL,
+  COMPOSE_MODELS,
+  getComposeModelConfig,
+  buildComposeImageInput,
+  type ModelConfig,
+} from "@/lib/models";
+import { getStyleConfig, buildStylePrompt, buildStyleBackgroundPrompt } from "@/lib/styles";
 import { rehostAll, rehostBuffer } from "@/lib/storage";
-import { runModel, describeModelError } from "@/lib/replicateRun";
+import { runModel, describeModelError, isTransientModelError } from "@/lib/replicateRun";
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
@@ -27,10 +38,20 @@ function runOne(
     prompt,
     aspect_ratio: aspectRatio,
     output_format: config.outputFormat,
-    ...(resolution ? { resolution } : {}),
+    ...(resolution ? { [config.resolutionParam ?? "resolution"]: resolution } : {}),
     ...config.extraInput,
     ...buildImageInput(config, dataUrl),
   });
+}
+
+// When a provider is at capacity (E003 etc.) even after runModel's retries,
+// rerun the job once on a model from a *different* provider — capacity crunches
+// are provider-wide, so retrying a sibling model from the same provider
+// (nano-banana for nano-banana-pro) would just fail the same way.
+function fallbackModelId(primaryId: string): string {
+  return primaryId === "openai/gpt-image-2"
+    ? "black-forest-labs/flux-kontext-pro"
+    : "openai/gpt-image-2";
 }
 
 export async function POST(req: NextRequest) {
@@ -45,6 +66,7 @@ export async function POST(req: NextRequest) {
     ? Math.min(Math.max(requestedOutputs, 1), 4)
     : 1;
   const modelId = (formData.get("model") as string) || DEFAULT_MODEL;
+  const style = getStyleConfig(formData.get("style") as string | null);
   const resolution = (formData.get("resolution") as string) || undefined;
   const backgroundPhoto = formData.get("backgroundPhoto");
 
@@ -71,9 +93,7 @@ export async function POST(req: NextRequest) {
     : buffer;
   const archiveType = hasOriginal ? (originalPhoto as Blob).type || "image/jpeg" : mimeType;
 
-  const promptText = prompt
-    ? `Disney Pixar 3D animated style, ${String(prompt).trim()}, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality`
-    : "Transform into Disney Pixar 3D animated style, big expressive eyes, smooth 3D render, cinematic lighting, vibrant colors, cute and charming, Pixar movie quality";
+  const promptText = buildStylePrompt(style, prompt ? String(prompt) : "");
 
   let uploadedFile: Awaited<ReturnType<typeof replicate.files.create>> | null = null;
   let uploadedBackground: Awaited<ReturnType<typeof replicate.files.create>> | null = null;
@@ -96,26 +116,63 @@ export async function POST(req: NextRequest) {
         new Blob([bgBuffer], { type: backgroundPhoto.type || "image/jpeg" })
       );
 
-      const bgPrompt = `Disney Pixar 3D animated style. Take the pet animal from the first image and transform it into a Pixar 3D animated character with big expressive eyes, smooth render, and vibrant colors. Place the Pixar pet sitting naturally inside the scene shown in the second image. Keep the background exactly as shown in the second image. Cinematic lighting, Pixar movie quality.`;
+      const bgPrompt = buildStyleBackgroundPrompt(style);
 
-      const runs = Array.from({ length: numOutputs }, () =>
-        runModel(replicate, "google/nano-banana", {
-          image_input: [imageUrl, uploadedBackground!.urls.get],
+      // Honor the user's model choice when it can take two images; Flux
+      // Kontext is single-image only, so it falls back to Nano Banana Pro.
+      const bgPrimary =
+        COMPOSE_MODELS.find((m) => m.id === modelId) ??
+        getComposeModelConfig("google/nano-banana-pro");
+      const bgFallback = getComposeModelConfig(
+        bgPrimary.id === "openai/gpt-image-2" ? "google/nano-banana-pro" : "openai/gpt-image-2"
+      );
+
+      const runBg = (config: ModelConfig) => {
+        const res = resolveResolution(config, resolution);
+        return runModel(replicate, config.id, {
           prompt: bgPrompt,
           aspect_ratio: aspectRatio,
-          output_format: "jpg",
-        })
-      );
-      const outputs = await Promise.all(runs);
-      const images = await rehostAll(outputs.map(String));
+          output_format: config.outputFormat,
+          ...(res ? { [config.resolutionParam ?? "resolution"]: res } : {}),
+          ...config.extraInput,
+          ...buildComposeImageInput(config, [imageUrl, uploadedBackground!.urls.get]),
+        });
+      };
+
+      let outputs: unknown[];
+      try {
+        outputs = await Promise.all(
+          Array.from({ length: numOutputs }, () => runBg(bgPrimary))
+        );
+      } catch (err) {
+        if (!isTransientModelError(err)) throw err;
+        console.warn(`${bgPrimary.id} at capacity — falling back to ${bgFallback.id}`);
+        outputs = await Promise.all(
+          Array.from({ length: numOutputs }, () => runBg(bgFallback))
+        );
+      }
+      const images = await rehostAll(outputs.map(extractImageUrl));
       return NextResponse.json({ images, uploadUrl });
     }
 
     // Normal single-image flow
-    const runs = Array.from({ length: numOutputs }, () =>
-      runOne(promptText, imageUrl, aspectRatio, modelId, resolution)
-    );
-    const outputs = await Promise.all(runs);
+    let outputs: unknown[];
+    try {
+      outputs = await Promise.all(
+        Array.from({ length: numOutputs }, () =>
+          runOne(promptText, imageUrl, aspectRatio, modelId, resolution)
+        )
+      );
+    } catch (err) {
+      if (!isTransientModelError(err)) throw err;
+      const fb = fallbackModelId(modelId);
+      console.warn(`${modelId} at capacity — falling back to ${fb}`);
+      outputs = await Promise.all(
+        Array.from({ length: numOutputs }, () =>
+          runOne(promptText, imageUrl, aspectRatio, fb, resolution)
+        )
+      );
+    }
     const images = await rehostAll(outputs.map(extractImageUrl));
 
     return NextResponse.json({ images, uploadUrl });
