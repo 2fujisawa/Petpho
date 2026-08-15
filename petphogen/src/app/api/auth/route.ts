@@ -20,7 +20,15 @@ function rateLimited(ip: string): boolean {
 }
 
 export async function POST(req: NextRequest) {
-  const { password } = await req.json();
+  // A malformed body is a bad request, not a server fault, so guard the parse
+  // rather than letting it surface as an unhandled 500.
+  let password: unknown;
+  try {
+    ({ password } = await req.json());
+  } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
+
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
 
   if (rateLimited(ip)) {
