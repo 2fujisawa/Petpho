@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
   const maskBase64 = (maskDataUrl as string).replace(/^data:image\/\w+;base64,/, "");
   const rawMaskBuffer = Buffer.from(maskBase64, "base64");
   // Mask covering the brushed region only (black elsewhere = leave alone).
-  let maskBuffer = rawMaskBuffer;
+  let maskBuffer: Buffer = rawMaskBuffer;
   // Mask covering only the newly-added canvas area, with the photo itself
   // blacked out so the extension pass can't touch it.
   let outpaintMaskBuffer: Buffer | null = null;
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
 
     const imgRes = await fetch(imageUrl);
     if (!imgRes.ok) throw new Error("Could not fetch source image");
-    let imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+    let imgBuffer: Buffer = Buffer.from(await imgRes.arrayBuffer());
     let imgType = imgRes.headers.get("content-type") || "image/jpeg";
 
     // Outpaint to a new aspect ratio: build a larger canvas and drop the photo

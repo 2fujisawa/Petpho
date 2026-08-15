@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const file = formData.get("photo");
   const prompt = formData.get("prompt");
-  const aspectRatio = (formData.get("aspectRatio") as string) || "1:1";
+  const aspectRatio = (formData.get("aspectRatio") as string) || "3:4";
   // A blank or non-numeric value used to yield NaN, which made Array.from
   // produce an empty run list — a 200 response with zero images and no error.
   const requestedOutputs = Number.parseInt(String(formData.get("numOutputs") ?? "1"), 10);

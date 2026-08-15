@@ -1,5 +1,14 @@
 import { put } from "@vercel/blob";
 
+// When sharp falls back to its wasm build (as it does on Vercel when the
+// native binary fails to load), the Buffers it returns are views onto the
+// wasm heap — a SharedArrayBuffer — and undici's fetch rejects request
+// bodies backed by shared memory ("ArrayBuffer: SharedArrayBuffer is not
+// allowed"). Copy into a fresh, non-shared ArrayBuffer before uploading.
+function toPlainBytes(buffer: Buffer): Buffer {
+  return buffer.buffer instanceof SharedArrayBuffer ? Buffer.from(buffer) : buffer;
+}
+
 // Copies a freshly generated image out of Replicate and into Blob.
 //
 // This matters more than it looks: Replicate's own output URLs expire after
@@ -68,13 +77,14 @@ export async function putBuffer(
   const ext = contentType.includes("png") ? "png" : "jpg";
   const filename = `petpho/${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   const sizeMb = (buffer.length / 1048576).toFixed(2);
+  const body = toPlainBytes(buffer);
 
   // One retry: a single dropped upload shouldn't lose work the user just paid
   // a model call for.
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const { url } = await put(filename, buffer, {
+      const { url } = await put(filename, body, {
         access: "public",
         contentType,
         token: process.env.BLOB_READ_WRITE_TOKEN,
@@ -103,7 +113,7 @@ export async function rehostGeneratedBuffer(buffer: Buffer, contentType: string)
   try {
     const ext = contentType.includes("png") ? "png" : "jpg";
     const filename = `petpho/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const { url } = await put(filename, buffer, {
+    const { url } = await put(filename, toPlainBytes(buffer), {
       access: "public",
       contentType,
       token: process.env.BLOB_READ_WRITE_TOKEN,

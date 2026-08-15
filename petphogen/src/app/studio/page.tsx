@@ -7,7 +7,6 @@ import { PREMADE_BACKGROUNDS } from "@/lib/premadeBackgrounds";
 import { STYLES, DEFAULT_STYLE, getStyleConfig, type StyleId } from "@/lib/styles";
 
 const ASPECT_RATIOS = [
-  { label: "1:1", value: "1:1" },
   { label: "4:3", value: "4:3" },
   { label: "3:4", value: "3:4" },
   { label: "16:9", value: "16:9" },
@@ -909,7 +908,7 @@ export default function Home() {
   const [showGenSettings, setShowGenSettings] = useState(false);
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<{ stop: () => void } | null>(null);
-  const [aspectRatio, setAspectRatio] = useState("1:1");
+  const [aspectRatio, setAspectRatio] = useState("3:4");
   const [numOutputs, setNumOutputs] = useState(1);
   const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
   const [artStyle, setArtStyle] = useState<StyleId>(DEFAULT_STYLE);
@@ -1302,7 +1301,7 @@ export default function Home() {
         const srcUrl = URL.createObjectURL(photo);
         img.onload = () => {
           URL.revokeObjectURL(srcUrl);
-          const [arW, arH] = (aspectRatio || "1:1").split(":").map(Number);
+          const [arW, arH] = (aspectRatio || "3:4").split(":").map(Number);
           const TARGET = 1024;
           const arScale = Math.min(TARGET / arW, TARGET / arH);
           const canvasW = Math.round(arW * arScale);
@@ -1421,28 +1420,43 @@ export default function Home() {
     setRefineZoom((z) => clamp(z * factor, 0.05, 8));
   }
 
-  // Ctrl/⌘ + wheel to zoom. Registered natively because React's wheel listener
-  // is passive, so preventDefault there wouldn't stop the browser zooming.
+  // Multiplicative so a notch feels the same at 10px as at 100px, but always
+  // moves at least 1px so small sizes don't get stuck rounding back to
+  // themselves.
+  function stepBrush(size: number, deltaY: number) {
+    const next = deltaY < 0 ? Math.max(size + 1, size * 1.1) : Math.min(size - 1, size * 0.9);
+    return clamp(Math.round(next), 5, 120);
+  }
+
+  // Wheel over the canvas resizes the brush; Ctrl/⌘ + wheel zooms. Registered
+  // natively because React's wheel listener is passive, so preventDefault there
+  // wouldn't stop the page scrolling / browser zooming.
   useEffect(() => {
     const el = refineViewRef.current;
     if (!el) return;
     function onWheel(e: WheelEvent) {
-      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setRefineZoom((z) => clamp(z * (e.deltaY < 0 ? 1.12 : 0.89), 0.05, 8));
+      if (e.ctrlKey || e.metaKey) {
+        setRefineZoom((z) => clamp(z * (e.deltaY < 0 ? 1.12 : 0.89), 0.05, 8));
+      } else {
+        setRefineBrush((s) => stepBrush(s, e.deltaY));
+      }
     }
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [refining]);
 
-  // Same Ctrl/⌘ + wheel zoom for the inpaint editor canvas.
+  // Same behaviour for the inpaint editor canvas.
   useEffect(() => {
     const el = editorViewRef.current;
     if (!el) return;
     function onWheel(e: WheelEvent) {
-      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setCanvasZoom((z) => clamp(z * (e.deltaY < 0 ? 1.12 : 0.89), 0.5, 3));
+      if (e.ctrlKey || e.metaKey) {
+        setCanvasZoom((z) => clamp(z * (e.deltaY < 0 ? 1.12 : 0.89), 0.5, 3));
+      } else {
+        setBrushSize((s) => stepBrush(s, e.deltaY));
+      }
     }
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
