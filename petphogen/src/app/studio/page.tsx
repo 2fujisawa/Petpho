@@ -991,7 +991,6 @@ export default function Home() {
 
     try {
       const savedVideos = localStorage.getItem("petpho-videos");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (savedVideos) setVideos(JSON.parse(savedVideos));
     } catch {}
 
