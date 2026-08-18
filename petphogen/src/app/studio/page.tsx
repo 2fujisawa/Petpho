@@ -1,10 +1,29 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
-import { MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, EDIT_MODELS, DEFAULT_EDIT_MODEL, getComposeModelConfig, getEditModelConfig, getModelConfig, VIDEO_MODELS, DEFAULT_VIDEO_MODEL, VIDEO_RESOLUTIONS, VIDEO_ASPECT_RATIOS, VIDEO_DURATIONS, getVideoModelConfig, type ModelId, type ModelConfig, type VideoModelId } from "@/lib/models";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import {
+  MODELS, DEFAULT_MODEL, COMPOSE_MODELS, DEFAULT_COMPOSE_MODEL, EDIT_MODELS, DEFAULT_EDIT_MODEL,
+  getComposeModelConfig, getEditModelConfig, getModelConfig,
+  VIDEO_MODELS, DEFAULT_VIDEO_MODEL, VIDEO_RESOLUTIONS, VIDEO_ASPECT_RATIOS, VIDEO_DURATIONS, getVideoModelConfig,
+  type ModelId, type VideoModelId,
+} from "@/lib/models";
 import { PREMADE_BACKGROUNDS } from "@/lib/premadeBackgrounds";
 import { STYLES, DEFAULT_STYLE, getStyleConfig, type StyleId } from "@/lib/styles";
+import { clamp, parseAspectRatio, letterboxSizePct, letterboxRect } from "@/lib/geometry";
+import { makeArchiveFile, downloadImage, formatDate } from "@/lib/browser";
+import { deleteBlob } from "@/lib/api";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { useDictation } from "@/hooks/useDictation";
+import { useWheelBrushZoom } from "@/hooks/useWheelBrushZoom";
+import type { GeneratedImage, EditorState, EditJob, GeneratedVideo, VideoJob } from "@/types/studio";
+import { InpaintCanvas, type InpaintCanvasHandle } from "@/components/studio/InpaintCanvas";
+import { CutoutRefiner, type CutoutRefinerHandle } from "@/components/studio/CutoutRefiner";
+import { ImageCard } from "@/components/studio/ImageCard";
+import {
+  label, chipOff, chipOn, floatCard, selectBox, overlayChip, errorBox,
+  ModelSwitcher, ModelDropdown, Chevron, SlidersIcon, MicIcon, GridSizeSlider, SelectToolbar,
+} from "@/components/studio/ui";
 
 const ASPECT_RATIOS = [
   { label: "4:3", value: "4:3" },
@@ -17,836 +36,11 @@ const ASPECT_RATIOS = [
 // server upscales to post-generation (see RESOLUTION_PX in /api/inpaint).
 const EDITOR_RESOLUTIONS = ["1K", "2K", "4K"];
 
-function aspectRatioToNumber(ratio: string): number {
-  const [w, h] = ratio.split(":").map(Number);
-  return w / h;
-}
+// Compose keeps the pet at a fixed default placement until the user drags it.
+const DEFAULT_PET_POS = { x: 50, y: 65 };
+const DEFAULT_PET_SCALE = 35;
 
-// Positions a content box (its own natural aspect ratio) inside a frame of a
-// possibly different aspect ratio, centered and never cropped — letterboxed
-// (bars top/bottom) or pillarboxed (bars left/right) depending on which is
-// relatively wider. Returns absolute-position CSS percentages for the content
-// box within a `position: relative` frame of the same size as the outer stage.
-// The same fit expressed as plain numbers — the size, in % of the frame, that
-// the content occupies when centred and uncropped. Used where the rect has to
-// be scaled/repositioned rather than just handed to CSS.
-function letterboxSizePct(contentAspect: number | null, frameAspect: number) {
-  if (!contentAspect) return { w: 100, h: 100 };
-  return contentAspect > frameAspect
-    ? { w: 100, h: (frameAspect / contentAspect) * 100 }
-    : { w: (contentAspect / frameAspect) * 100, h: 100 };
-}
-
-function letterboxRect(contentAspect: number | null, frameAspect: number): React.CSSProperties {
-  if (!contentAspect) return { inset: 0 };
-  return contentAspect > frameAspect
-    ? {
-        left: 0,
-        width: "100%",
-        top: `${(100 - (frameAspect / contentAspect) * 100) / 2}%`,
-        height: `${(frameAspect / contentAspect) * 100}%`,
-      }
-    : {
-        top: 0,
-        height: "100%",
-        left: `${(100 - (contentAspect / frameAspect) * 100) / 2}%`,
-        width: `${(contentAspect / frameAspect) * 100}%`,
-      };
-}
-
-type GeneratedImage = {
-  url: string;
-  prompt: string;
-  model: ModelId;
-  sourceUrl?: string;
-  uploadUrl?: string;
-  createdAt?: number;
-  // Present only on results produced by the inpaint editor — lets reopening
-  // this image restore the ratio/resolution/model it was made with, instead
-  // of falling back to whatever the editor currently defaults to.
-  editSettings?: { aspectRatio: string; resolution: string; model: ModelId };
-};
-
-type EditorState = {
-  sourceImage: GeneratedImage;
-  editPrompt: string;
-  model: ModelId;
-  aspectRatio: string; // "original" or e.g. "16:9" — non-original outpaints the canvas
-  resolution: string; // "original" or e.g. "2K" — non-original upscales the result
-  loading: boolean;
-  error: string | null;
-};
-
-// One in-flight (or failed) "Apply Edit" call. Tracked outside EditorState so
-// firing another edit — even against a different photo or model — never has
-// to wait on this one, and switching away from the editor doesn't lose track
-// of it: it keeps running and lands in history regardless.
-type EditJob = {
-  id: string;
-  thumbnailUrl: string;
-  model: ModelId;
-  error?: string;
-};
-
-type GeneratedVideo = {
-  url: string;
-  prompt: string;
-  model: VideoModelId;
-  // The still it was animated from, when it wasn't plain text-to-video.
-  sourceUrl?: string;
-  createdAt?: number;
-};
-
-// Same shape and reasoning as EditJob — a clip takes minutes, so it has to keep
-// running while you queue more, switch tabs, or go back to editing.
-type VideoJob = {
-  id: string;
-  thumbnailUrl?: string;
-  model: VideoModelId;
-  error?: string;
-};
-
-type InpaintCanvasHandle = {
-  getMaskDataUrl: () => string | null;
-  clear: () => void;
-};
-
-const InpaintCanvas = forwardRef<
-  InpaintCanvasHandle,
-  {
-    imageUrl: string;
-    brushSize: number;
-    tool: "brush" | "eraser";
-    // False while the photo is being positioned, so drags move it instead of
-    // painting on it.
-    interactive?: boolean;
-    onImageLoad?: (w: number, h: number) => void;
-  }
->(function InpaintCanvas({ imageUrl, brushSize, tool, interactive = true, onImageLoad }, ref) {
-  const displayRef = useRef<HTMLCanvasElement>(null);
-  const maskRef = useRef<HTMLCanvasElement>(null);
-  const drawingRef = useRef(false);
-  const lastRef = useRef<{ x: number; y: number } | null>(null);
-  // Pointer position (canvas-relative CSS px) for the brush-size preview ring —
-  // same brush affordance as the cutout touch-up tool.
-  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
-
-  useImperativeHandle(ref, () => ({
-    getMaskDataUrl: () => maskRef.current?.toDataURL("image/png") ?? null,
-    clear: () => {
-      const d = displayRef.current;
-      const m = maskRef.current;
-      if (!d || !m) return;
-      d.getContext("2d")!.clearRect(0, 0, d.width, d.height);
-      const mctx = m.getContext("2d")!;
-      mctx.fillStyle = "#000";
-      mctx.fillRect(0, 0, m.width, m.height);
-    },
-  }));
-
-  function initCanvases(w: number, h: number) {
-    const d = displayRef.current!;
-    const m = maskRef.current!;
-    d.width = w; d.height = h;
-    m.width = w; m.height = h;
-    const mctx = m.getContext("2d")!;
-    mctx.fillStyle = "#000";
-    mctx.fillRect(0, 0, w, h);
-  }
-
-  function updateCursor(e: React.PointerEvent<HTMLCanvasElement>) {
-    const c = displayRef.current;
-    if (!c) return;
-    const r = c.getBoundingClientRect();
-    setCursor({ x: e.clientX - r.left, y: e.clientY - r.top });
-  }
-
-  function getPos(e: React.PointerEvent<HTMLCanvasElement>) {
-    const c = displayRef.current!;
-    const r = c.getBoundingClientRect();
-    return {
-      x: ((e.clientX - r.left) / r.width) * c.width,
-      y: ((e.clientY - r.top) / r.height) * c.height,
-      radius: (brushSize / r.width) * c.width,
-    };
-  }
-
-  // Stroke from the previous point to the current one rather than stamping a
-  // lone circle per event — a fast drag then paints a continuous band instead
-  // of a dotted trail. Same approach as the touch-up brush.
-  function paint(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!drawingRef.current) return;
-    const { x, y, radius } = getPos(e);
-    const last = lastRef.current ?? { x, y };
-    const dctx = displayRef.current!.getContext("2d")!;
-    const mctx = maskRef.current!.getContext("2d")!;
-
-    for (const ctx of [dctx, mctx]) {
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = radius * 2;
-      ctx.beginPath();
-      ctx.moveTo(last.x, last.y);
-      ctx.lineTo(x, y);
-    }
-
-    if (tool === "brush") {
-      dctx.strokeStyle = "rgba(255, 80, 0, 0.5)"; dctx.stroke();
-      mctx.strokeStyle = "#fff"; mctx.stroke();
-    } else {
-      dctx.save();
-      dctx.globalCompositeOperation = "destination-out";
-      dctx.strokeStyle = "rgba(0,0,0,1)"; dctx.stroke();
-      dctx.restore();
-      mctx.strokeStyle = "#000"; mctx.stroke();
-    }
-    lastRef.current = { x, y };
-  }
-
-  function endStroke() {
-    drawingRef.current = false;
-    lastRef.current = null;
-  }
-
-  return (
-    <div className="absolute inset-0 select-none rounded-2xl overflow-hidden ring-1 ring-orange-400/25">
-      <img src={imageUrl} alt="Inpaint target" className="w-full h-full block object-contain" draggable={false}
-        onLoad={(e) => {
-          const img = e.currentTarget;
-          initCanvases(img.naturalWidth, img.naturalHeight);
-          onImageLoad?.(img.naturalWidth, img.naturalHeight);
-        }} />
-      <canvas ref={displayRef}
-        className={`absolute inset-0 w-full h-full ${interactive ? "cursor-none" : "pointer-events-none"}`}
-        style={{ touchAction: "none" }}
-        onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture(e.pointerId);
-          drawingRef.current = true;
-          lastRef.current = null;
-          updateCursor(e);
-          paint(e);
-        }}
-        onPointerMove={(e) => { updateCursor(e); paint(e); }}
-        onPointerUp={endStroke}
-        onPointerLeave={() => { endStroke(); setCursor(null); }} />
-      {interactive && cursor && (
-        <div
-          className="pointer-events-none absolute rounded-full border-2 border-orange-400 bg-orange-400/10"
-          style={{
-            left: cursor.x,
-            top: cursor.y,
-            width: brushSize * 2,
-            height: brushSize * 2,
-            transform: "translate(-50%, -50%)",
-          }}
-        />
-      )}
-      <canvas ref={maskRef} className="hidden" />
-    </div>
-  );
-});
-
-type CutoutRefinerHandle = {
-  toBlob: () => Promise<Blob | null>;
-  reset: () => void;
-};
-
-// Manual touch-up for an automatic cutout: erase leftover background the model
-// missed, or paint back parts of the pet it trimmed off. The untouched original
-// is kept on an offscreen canvas to sample from when restoring.
-const CutoutRefiner = forwardRef<
-  CutoutRefinerHandle,
-  {
-    cutoutUrl: string;
-    originalUrl: string;
-    brushSize: number;
-    tool: "erase" | "restore";
-    zoom: number;
-    onReady?: (w: number, h: number) => void;
-  }
->(function CutoutRefiner({ cutoutUrl, originalUrl, brushSize, tool, zoom, onReady }, ref) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Created in an effect, not at render — this component still gets SSR'd.
-  const originalRef = useRef<HTMLCanvasElement | null>(null);
-  const scratchRef = useRef<HTMLCanvasElement | null>(null);
-  const drawingRef = useRef(false);
-  const lastRef = useRef<{ x: number; y: number } | null>(null);
-  const [ready, setReady] = useState(false);
-  // Natural pixel size of the cutout — the display size is this times zoom.
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
-  // Pointer position (container-relative CSS px) for the brush-size preview ring.
-  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
-  // Held in a ref so the loader effect doesn't re-run (and re-fetch both
-  // images) every time the parent hands over a fresh inline callback.
-  const onReadyRef = useRef(onReady);
-  useEffect(() => { onReadyRef.current = onReady; });
-
-  function drawCutout(img: HTMLImageElement) {
-    const c = canvasRef.current;
-    if (!c) return;
-    const ctx = c.getContext("2d")!;
-    ctx.clearRect(0, 0, c.width, c.height);
-    ctx.drawImage(img, 0, 0, c.width, c.height);
-  }
-
-  useImperativeHandle(ref, () => ({
-    // Vercel rejects request bodies past ~4.5MB before the route ever runs, and
-    // a browser-encoded 2048px RGBA PNG clears that easily. Shrink until it
-    // fits rather than letting the save fail.
-    toBlob: async () => {
-      const c = canvasRef.current;
-      if (!c) return null;
-      const LIMIT = 4 * 1024 * 1024;
-
-      const encode = (canvas: HTMLCanvasElement) =>
-        new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-
-      let blob = await encode(c);
-      for (const scale of [0.75, 0.55, 0.4, 0.3]) {
-        if (!blob || blob.size <= LIMIT) break;
-        const small = document.createElement("canvas");
-        small.width = Math.round(c.width * scale);
-        small.height = Math.round(c.height * scale);
-        const sctx = small.getContext("2d")!;
-        sctx.imageSmoothingQuality = "high";
-        sctx.drawImage(c, 0, 0, small.width, small.height);
-        blob = await encode(small);
-      }
-      return blob;
-    },
-    reset: () => {
-      const img = document.createElement("img");
-      img.crossOrigin = "anonymous";
-      img.onload = () => drawCutout(img);
-      img.src = cutoutUrl;
-    },
-  }));
-
-  // crossOrigin is required, otherwise the canvas is tainted and toBlob throws.
-  // Caller remounts this component (via `key`) when cutoutUrl/originalUrl
-  // change, so `ready` already starts false — no need to reset it here.
-  useEffect(() => {
-    let cancelled = false;
-    const cut = document.createElement("img");
-    const orig = document.createElement("img");
-    cut.crossOrigin = "anonymous";
-    orig.crossOrigin = "anonymous";
-
-    let loaded = 0;
-    const onBoth = () => {
-      if (cancelled || ++loaded < 2) return;
-      const c = canvasRef.current;
-      if (!c) return;
-      const w = cut.naturalWidth;
-      const h = cut.naturalHeight;
-      c.width = w;
-      c.height = h;
-      c.getContext("2d")!.drawImage(cut, 0, 0);
-
-      const o = document.createElement("canvas");
-      o.width = w; o.height = h;
-      o.getContext("2d")!.drawImage(orig, 0, 0, w, h);
-      originalRef.current = o;
-
-      const sc = document.createElement("canvas");
-      sc.width = w; sc.height = h;
-      scratchRef.current = sc;
-
-      setDims({ w, h });
-      setReady(true);
-      onReadyRef.current?.(w, h);
-    };
-    cut.onload = onBoth;
-    orig.onload = onBoth;
-    cut.src = cutoutUrl;
-    orig.src = originalUrl;
-    return () => { cancelled = true; };
-  }, [cutoutUrl, originalUrl]);
-
-  function updateCursor(e: React.PointerEvent<HTMLCanvasElement>) {
-    const c = canvasRef.current;
-    if (!c) return;
-    const r = c.getBoundingClientRect();
-    setCursor({ x: e.clientX - r.left, y: e.clientY - r.top });
-  }
-
-  function posOf(e: React.PointerEvent<HTMLCanvasElement>) {
-    const c = canvasRef.current!;
-    const r = c.getBoundingClientRect();
-    return {
-      x: ((e.clientX - r.left) / r.width) * c.width,
-      y: ((e.clientY - r.top) / r.height) * c.height,
-      radius: (brushSize / r.width) * c.width,
-    };
-  }
-
-  function stroke(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!drawingRef.current || !ready) return;
-    const c = canvasRef.current!;
-    const ctx = c.getContext("2d")!;
-    const { x, y, radius } = posOf(e);
-    const last = lastRef.current ?? { x, y };
-
-    if (tool === "erase") {
-      ctx.save();
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = radius * 2;
-      ctx.beginPath();
-      ctx.moveTo(last.x, last.y);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      // Stroke onto scratch, keep only the original's pixels inside that stroke
-      // (source-in), then lay the result back over the working canvas.
-      const sc = scratchRef.current;
-      const orig = originalRef.current;
-      if (!sc || !orig) return;
-      const sctx = sc.getContext("2d")!;
-      sctx.clearRect(0, 0, sc.width, sc.height);
-      sctx.globalCompositeOperation = "source-over";
-      sctx.lineCap = "round";
-      sctx.lineJoin = "round";
-      sctx.lineWidth = radius * 2;
-      sctx.strokeStyle = "#000";
-      sctx.beginPath();
-      sctx.moveTo(last.x, last.y);
-      sctx.lineTo(x, y);
-      sctx.stroke();
-      sctx.globalCompositeOperation = "source-in";
-      sctx.drawImage(orig, 0, 0);
-      ctx.drawImage(sc, 0, 0);
-    }
-    lastRef.current = { x, y };
-  }
-
-  function endStroke() {
-    drawingRef.current = false;
-    lastRef.current = null;
-  }
-
-  return (
-    // m-auto (not justify-center) so the box stays centred in its scroll parent
-    // without the overflowing edge being clipped when zoomed past the viewport.
-    <div
-      className="relative m-auto flex-shrink-0 rounded-xl overflow-hidden ring-1 ring-black/[0.12]"
-      style={{
-        width: dims ? dims.w * zoom : "100%",
-        height: dims ? dims.h * zoom : 240,
-        backgroundImage:
-          "linear-gradient(45deg,#e4e4e7 25%,transparent 25%),linear-gradient(-45deg,#e4e4e7 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e4e4e7 75%),linear-gradient(-45deg,transparent 75%,#e4e4e7 75%)",
-        backgroundSize: "22px 22px",
-        backgroundPosition: "0 0,0 11px,11px -11px,-11px 0",
-      }}
-    >
-      <canvas
-        ref={canvasRef}
-        className="block w-full h-full cursor-none"
-        style={{ touchAction: "none" }}
-        onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture(e.pointerId);
-          drawingRef.current = true;
-          lastRef.current = null;
-          updateCursor(e);
-          stroke(e);
-        }}
-        onPointerMove={(e) => { updateCursor(e); stroke(e); }}
-        onPointerUp={endStroke}
-        onPointerLeave={() => { endStroke(); setCursor(null); }}
-      />
-      {ready && cursor && (
-        <div
-          className="pointer-events-none absolute rounded-full border-2 border-orange-400 bg-orange-400/10"
-          style={{
-            left: cursor.x,
-            top: cursor.y,
-            width: brushSize * 2,
-            height: brushSize * 2,
-            transform: "translate(-50%, -50%)",
-          }}
-        />
-      )}
-      {!ready && (
-        <div className="absolute inset-0 flex items-center justify-center bg-white/70">
-          <span className="w-6 h-6 border-2 border-orange-500/30 border-t-orange-500 rounded-full animate-spin" />
-        </div>
-      )}
-    </div>
-  );
-});
-
-const label = "text-[11px] font-semibold text-zinc-500 uppercase tracking-[0.14em]";
-const chipOff =
-  "bg-black/[0.035] border-transparent text-zinc-600 hover:bg-black/[0.06] hover:text-zinc-800";
-const chipOn = "bg-orange-500 border-orange-500 text-white shadow-sm shadow-orange-500/25";
-const floatCard =
-  "bg-white rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_rgba(0,0,0,0.06)]";
-
-function ModelSwitcher({
-  value,
-  onChange,
-  models = MODELS,
-  title = "Model",
-  compact = false,
-}: {
-  value: ModelId;
-  onChange: (id: ModelId) => void;
-  models?: ModelConfig[];
-  title?: string;
-  compact?: boolean;
-}) {
-  if (compact) {
-    return (
-      <div className="flex flex-col gap-2">
-        <label className={label}>{title}</label>
-        <div className="flex flex-wrap gap-2">
-          {models.map((m) => (
-            <button key={m.id} onClick={() => onChange(m.id)}
-              title={`${m.provider} — ${m.description}`}
-              className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-all duration-200 whitespace-nowrap ${
-                value === m.id ? chipOn : chipOff
-              }`}>
-              {m.name}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <label className={label}>{title}</label>
-      <div className="flex flex-col gap-1.5">
-        {models.map((m) => (
-          <button key={m.id} onClick={() => onChange(m.id)}
-            className={`text-left rounded-2xl px-3 py-2.5 transition-all duration-200 ${
-              value === m.id
-                ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-sm shadow-orange-500/20"
-                : "bg-black/[0.03] text-zinc-700 hover:bg-black/[0.06]"
-            }`}>
-            <p className="text-xs font-bold leading-tight">{m.name}</p>
-            <p className={`text-xs mt-0.5 leading-tight ${value === m.id ? "text-white/80" : "text-zinc-500"}`}>
-              {m.provider} — {m.description}
-            </p>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const selectBox =
-  "w-full appearance-none text-xs font-semibold text-zinc-800 bg-black/[0.035] rounded-xl pl-3 pr-7 py-2 cursor-pointer transition-colors hover:bg-black/[0.06] focus:outline-none focus:ring-2 focus:ring-orange-400/30";
-
-function Chevron() {
-  return (
-    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 text-[9px]">
-      ▼
-    </span>
-  );
-}
-
-// Space-efficient stand-in for ModelSwitcher — one row instead of one card per model.
-function ModelDropdown({
-  value, onChange, models, title,
-}: {
-  value: ModelId;
-  onChange: (id: ModelId) => void;
-  models: ModelConfig[];
-  title: string;
-}) {
-  const current = models.find((m) => m.id === value);
-  return (
-    <div className="flex flex-col gap-1.5 min-w-0 flex-1">
-      <label className={label}>{title}</label>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value as ModelId)}
-          title={current ? `${current.provider} — ${current.description}` : undefined}
-          className={selectBox}
-        >
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>{m.name}</option>
-          ))}
-        </select>
-        <Chevron />
-      </div>
-    </div>
-  );
-}
-
-function SlidersIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <line x1="21" y1="4" x2="14" y2="4" /><line x1="10" y1="4" x2="3" y2="4" />
-      <line x1="21" y1="12" x2="12" y2="12" /><line x1="8" y1="12" x2="3" y2="12" />
-      <line x1="21" y1="20" x2="16" y2="20" /><line x1="12" y1="20" x2="3" y2="20" />
-      <line x1="14" y1="2" x2="14" y2="6" /><line x1="8" y1="10" x2="8" y2="14" /><line x1="16" y1="18" x2="16" y2="22" />
-    </svg>
-  );
-}
-
-function MicIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-      <line x1="12" y1="19" x2="12" y2="22" />
-    </svg>
-  );
-}
-
-function GridSizeSlider({ columns, onChange }: { columns: number; onChange: (n: number) => void }) {
-  return (
-    <div className="flex items-center gap-2 bg-white/80 backdrop-blur-sm rounded-full pl-3 pr-2 py-1.5 shadow-sm flex-shrink-0" title="Adjust how many photos show per row">
-      <span className="text-xs text-zinc-500">🔳</span>
-      <input type="range" min={2} max={8} value={columns}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-20" />
-      <span className="text-[11px] text-zinc-500 font-semibold w-4 text-center">{columns}</span>
-    </div>
-  );
-}
-
-function SelectToolbar({
-  selectMode, selectedCount, onToggle, onSelectAll, onDelete,
-}: {
-  selectMode: boolean;
-  selectedCount: number;
-  onToggle: () => void;
-  onSelectAll: () => void;
-  onDelete: () => void;
-}) {
-  if (!selectMode) {
-    return (
-      <button onClick={onToggle}
-        className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 bg-black/[0.035] text-zinc-600 hover:text-zinc-800 hover:bg-black/[0.06] flex-shrink-0">
-        Select
-      </button>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2 flex-shrink-0">
-      <span className="text-xs text-zinc-500 font-medium whitespace-nowrap">{selectedCount} selected</span>
-      <button onClick={onSelectAll}
-        className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 bg-black/[0.035] text-zinc-600 hover:text-zinc-800 hover:bg-black/[0.06]">
-        Select all
-      </button>
-      <button onClick={onDelete} disabled={selectedCount === 0}
-        className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 bg-red-500 text-white hover:bg-red-400 disabled:opacity-40 disabled:cursor-not-allowed">
-        Delete{selectedCount > 0 ? ` (${selectedCount})` : ""}
-      </button>
-      <button onClick={onToggle}
-        className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200 text-zinc-500 hover:text-zinc-800 hover:bg-black/[0.06]">
-        Cancel
-      </button>
-    </div>
-  );
-}
-
-// Everything that floats over a thumbnail shares one neutral treatment — the
-// badges aren't colour-coded by model any more.
-const overlayChip =
-  "bg-white/15 hover:bg-white/30 backdrop-blur-sm text-white transition-colors";
-
-function clamp(n: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, n));
-}
-
-// A plain `<a download>` is ignored by browsers for cross-origin URLs (Blob
-// storage / Replicate are both cross-origin from this app) — they just
-// navigate to the image instead of downloading it. Fetching the bytes and
-// saving via a same-origin blob: URL makes the download attribute honored.
-// Full-size copy for the Originals library. Only shrinks when the file is big
-// enough to risk the upload limit — otherwise the bytes go through untouched.
-async function makeArchiveFile(file: File): Promise<File> {
-  const MAX_BYTES = 8 * 1024 * 1024;
-  if (file.size <= MAX_BYTES) return file;
-  return new Promise((resolve) => {
-    const img = document.createElement("img");
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const MAX = 2560;
-      const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(img.naturalWidth * scale);
-      canvas.height = Math.round(img.naturalHeight * scale);
-      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(
-        (blob) => {
-          URL.revokeObjectURL(url);
-          resolve(blob ? new File([blob], file.name, { type: "image/jpeg" }) : file);
-        },
-        "image/jpeg",
-        0.9
-      );
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
-    img.src = url;
-  });
-}
-
-// localStorage is a hard ~5MB per origin and throws once it's full. History
-// only grows, so an unguarded write eventually throws inside a render effect
-// and takes the page down. Drop the oldest entries and retry instead.
-function persistJson(key: string, value: unknown, trim?: (v: never, keep: number) => unknown) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    for (const keep of [400, 150, 50]) {
-      try {
-        localStorage.setItem(key, JSON.stringify(trim ? trim(value as never, keep) : value));
-        return;
-      } catch {}
-    }
-    console.warn(`Could not persist ${key} — storage is full.`);
-  }
-}
-
-async function downloadImage(url: string) {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("fetch failed");
-    const blob = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = blobUrl;
-    a.download = url.split("/").pop()?.split("?")[0] || "petpho.jpg";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(blobUrl);
-  } catch {
-    window.open(url, "_blank");
-  }
-}
-
-function formatDate(ts?: number) {
-  if (!ts) return null;
-  const d = new Date(ts);
-  const now = new Date();
-  const diffH = (now.getTime() - d.getTime()) / 3600000;
-  if (diffH < 1) return "Just now";
-  if (diffH < 24) return `${Math.floor(diffH)}h ago`;
-  if (diffH < 48) return "Yesterday";
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function ImageCard({
-  img, index, onOpen, onEdit, onScene, onRemove, onViewOriginal, isBroken, onBroken, showDate,
-  selectMode = false, selected = false, onToggleSelect,
-}: {
-  img: GeneratedImage;
-  index: number;
-  onOpen: () => void;
-  onEdit: () => void;
-  onScene: () => void;
-  onRemove: () => void;
-  onViewOriginal: () => void;
-  isBroken: boolean;
-  onBroken: () => void;
-  showDate?: boolean;
-  selectMode?: boolean;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-}) {
-  const modelName = MODELS.find((m) => m.id === img.model)?.name ?? img.model.split("/")[1];
-  return (
-    <div className="break-inside-avoid animate-fade-up" style={{ animationDelay: `${Math.min(index * 35, 350)}ms` }}>
-      <div
-        className={`group relative rounded-2xl overflow-hidden bg-white cursor-pointer transition-opacity duration-150 ${
-          isBroken ? "" : "card-glow"
-        } ${selectMode && !selected ? "opacity-60" : ""} ${selected ? "ring-2 ring-orange-400" : ""}`}
-        onClick={() => {
-          if (selectMode) { onToggleSelect?.(); return; }
-          if (!isBroken) onOpen();
-        }}
-      >
-        {selectMode && (
-          <div className={`absolute top-2 right-2 z-10 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${
-            selected ? "bg-orange-500 border-orange-500" : "bg-white/70 border-white backdrop-blur-sm"
-          }`}>
-            {selected && <span className="text-white text-[10px] leading-none">✓</span>}
-          </div>
-        )}
-        {isBroken ? (
-          <div className="aspect-square flex flex-col items-center justify-center gap-2 p-4">
-            <span className="text-3xl opacity-30">🖼️</span>
-            <p className="text-xs text-zinc-500 font-medium">Expired</p>
-            {!selectMode && (
-              <button onClick={(e) => { e.stopPropagation(); onRemove(); }}
-                className="text-xs bg-red-500/15 hover:bg-red-500/30 text-red-400 px-3 py-1 rounded-full transition-colors font-medium mt-1">
-                Remove
-              </button>
-            )}
-          </div>
-        ) : (
-          <>
-            <div className="overflow-hidden">
-              <Image src={img.url} alt={img.prompt} width={512} height={512}
-                className="w-full h-auto object-cover transition-transform duration-500 ease-out group-hover:scale-[1.05]"
-                unoptimized onError={onBroken} priority={index === 0} />
-            </div>
-            {/* Hover overlay */}
-            {!selectMode && (
-              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
-                <p className="text-xs text-white/90 line-clamp-2 font-medium leading-relaxed translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
-                  {img.prompt}
-                </p>
-                <div className="flex gap-1.5 flex-wrap translate-y-2 group-hover:translate-y-0 transition-transform duration-300 delay-[40ms]">
-                  <button onClick={(e) => { e.stopPropagation(); onEdit(); }}
-                    className={`text-xs px-2.5 py-1 rounded-full font-semibold ${overlayChip}`}>
-                    ✏️ Edit
-                  </button>
-                  <button onClick={(e) => { e.stopPropagation(); onScene(); }}
-                    className={`text-xs px-2.5 py-1 rounded-full font-semibold ${overlayChip}`}>
-                    🖼️ Scene
-                  </button>
-                  {img.uploadUrl && (
-                    <button onClick={(e) => { e.stopPropagation(); onViewOriginal(); }}
-                      className={`text-xs px-2.5 py-1 rounded-full font-semibold ${overlayChip}`}>
-                      🐾 Original
-                    </button>
-                  )}
-                  <button onClick={(e) => { e.stopPropagation(); downloadImage(img.url); }}
-                    className={`text-xs w-6 h-6 flex items-center justify-center rounded-full ${overlayChip}`}>
-                    ↓
-                  </button>
-                </div>
-              </div>
-            )}
-            {/* Badges */}
-            <div className="absolute top-2 left-2 right-2 flex justify-between items-start pointer-events-none">
-              {img.sourceUrl && !selectMode && (
-                <span className="text-[10px] bg-black/45 backdrop-blur-sm text-white/85 px-2 py-0.5 rounded-full font-semibold opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                  Edited
-                </span>
-              )}
-              {!selectMode && (
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto backdrop-blur-sm bg-black/45 text-white/85 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                  {modelName}
-                </span>
-              )}
-            </div>
-            {showDate && formatDate(img.createdAt) && (
-              <div className="absolute bottom-2 right-2 pointer-events-none">
-                <span className="text-[10px] bg-black/50 backdrop-blur-sm text-white/80 px-2 py-0.5 rounded-full font-medium">
-                  {formatDate(img.createdAt)}
-                </span>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export default function Home() {
+export default function StudioPage() {
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   // The untouched file, kept alongside the downscaled copy sent to the model so
@@ -860,8 +54,8 @@ export default function Home() {
   );
   const [selectedPremadeBg, setSelectedPremadeBg] = useState<string | null>(null);
   const [bgAspect, setBgAspect] = useState<number | null>(null);
-  const [petPos, setPetPos] = useState({ x: 50, y: 65 });
-  const [petScale, setPetScale] = useState(35);
+  const [petPos, setPetPos] = useState(DEFAULT_PET_POS);
+  const [petScale, setPetScale] = useState(DEFAULT_PET_SCALE);
   // Natural width/height of the pet image — needed to work out the box's height
   // so corner-dragging can scale it without distorting the pet.
   const [petAspect, setPetAspect] = useState(1);
@@ -895,7 +89,9 @@ export default function Home() {
   // Remembers cutouts by source photo URL so a background removal survives
   // switching tabs and away from Compose — reopening the same photo restores
   // the already-removed background instead of asking to redo the work.
-  const [cutoutCache, setCutoutCache] = useState<Record<string, string>>({});
+  // Persisted: without that a refresh looked like "the removed background
+  // didn't stick" even though the file was still sitting in Blob storage.
+  const [cutoutCache, setCutoutCache] = usePersistedState<Record<string, string>>("petpho-cutout-cache", {});
   const [activeTab, setActiveTab] = useState<"generate" | "history" | "originals" | "video">("generate");
   // Source pet photos, listed from blob storage rather than derived from
   // history's uploadUrl — that field only exists for images generated in this
@@ -906,8 +102,7 @@ export default function Home() {
   const [galleryColumns, setGalleryColumns] = useState(5);
   const [prompt, setPrompt] = useState("");
   const [showGenSettings, setShowGenSettings] = useState(false);
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<{ stop: () => void } | null>(null);
+  const { listening, toggle: toggleDictation } = useDictation();
   const [aspectRatio, setAspectRatio] = useState("3:4");
   const [numOutputs, setNumOutputs] = useState(1);
   const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
@@ -915,7 +110,9 @@ export default function Home() {
   const [resolution, setResolution] = useState("2K");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<GeneratedImage[]>([]);
+  const [history, setHistory] = usePersistedState<GeneratedImage[]>(
+    "petpho-history", [], (h, keep) => h.slice(0, keep)
+  );
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -960,10 +157,10 @@ export default function Home() {
   const [canvasZoom, setCanvasZoom] = useState(1);
   const inpaintCanvasRef = useRef<InpaintCanvasHandle>(null);
   const editorViewRef = useRef<HTMLElement>(null);
-  const historyInitialSaveSkipped = useRef(false);
-  const cutoutCacheInitialSaveSkipped = useRef(false);
   // ── Video (Seedance) ──
-  const [videos, setVideos] = useState<GeneratedVideo[]>([]);
+  const [videos, setVideos] = usePersistedState<GeneratedVideo[]>(
+    "petpho-videos", [], (v, keep) => v.slice(0, keep)
+  );
   const [videoJobs, setVideoJobs] = useState<VideoJob[]>([]);
   const [videoSourceUrl, setVideoSourceUrl] = useState<string | null>(null);
   const [videoPrompt, setVideoPrompt] = useState("");
@@ -973,27 +170,12 @@ export default function Home() {
   const [videoAspect, setVideoAspect] = useState("adaptive");
   const [videoAudio, setVideoAudio] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
-  const videosInitialSaveSkipped = useRef(false);
 
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
   const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    // Must load in an effect, not a useState initializer: localStorage isn't
-    // available during SSR, so reading it eagerly would make the client's
-    // first render disagree with the server-rendered HTML (hydration error).
-    try {
-      const saved = localStorage.getItem("petpho-history");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (saved) setHistory(JSON.parse(saved));
-    } catch {}
-
-    try {
-      const savedVideos = localStorage.getItem("petpho-videos");
-      if (savedVideos) setVideos(JSON.parse(savedVideos));
-    } catch {}
-
     // Sync with blob storage so history follows the account, not the browser:
     // pick up images generated elsewhere, and drop local entries for images
     // that were deleted elsewhere (otherwise they'd linger here as "Expired").
@@ -1018,12 +200,7 @@ export default function Home() {
           const known = new Set(pruned.map((v) => v.url));
           const recovered = (data.videos ?? [])
             .filter((v) => !known.has(v.url))
-            .map((v) => ({
-              url: v.url,
-              prompt: "",
-              model: "" as VideoModelId,
-              createdAt: v.createdAt,
-            }));
+            .map((v) => ({ url: v.url, prompt: "", createdAt: v.createdAt }));
           if (pruned.length === prev.length && !recovered.length) return prev;
           return [...pruned, ...recovered].sort(
             (a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)
@@ -1037,12 +214,7 @@ export default function Home() {
           const known = new Set(pruned.map((x) => x.url));
           const recovered = (data.images ?? [])
             .filter((img) => !known.has(img.url))
-            .map((img) => ({
-              url: img.url,
-              prompt: "",
-              model: "" as ModelId,
-              createdAt: img.createdAt,
-            }));
+            .map((img) => ({ url: img.url, prompt: "", createdAt: img.createdAt }));
           if (pruned.length === prev.length && !recovered.length) return prev;
           // Infinity - Infinity is NaN, which Array.sort treats as "equal" but
           // inconsistently across engines — two undated entries could then
@@ -1054,54 +226,7 @@ export default function Home() {
         });
       })
       .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!historyInitialSaveSkipped.current) {
-      historyInitialSaveSkipped.current = true;
-      return;
-    }
-    persistJson("petpho-history", history, (h: GeneratedImage[], keep) => h.slice(0, keep));
-  }, [history]);
-
-  useEffect(() => {
-    if (!videosInitialSaveSkipped.current) {
-      videosInitialSaveSkipped.current = true;
-      return;
-    }
-    persistJson("petpho-videos", videos, (v: GeneratedVideo[], keep) => v.slice(0, keep));
-  }, [videos]);
-
-  // Cutout cache was in-memory only — it didn't survive a page refresh (or a
-  // dev-server hot reload), which looked like "the removed background didn't
-  // stick" even though the underlying file was still sitting in Blob storage.
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("petpho-cutout-cache");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (saved) setCutoutCache(JSON.parse(saved));
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    if (!cutoutCacheInitialSaveSkipped.current) {
-      cutoutCacheInitialSaveSkipped.current = true;
-      return;
-    }
-    persistJson("petpho-cutout-cache", cutoutCache);
-  }, [cutoutCache]);
-
-  useEffect(() => {
-    if (!lightbox) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") { setLightbox(null); return; }
-      if (e.key === "ArrowLeft") navigateLightbox(-1);
-      else if (e.key === "ArrowRight") navigateLightbox(1);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightbox, history]);
-
+  }, [setHistory, setVideos]);
 
   // Fire-and-forget by design: everything the request needs is captured into
   // `snapshot` up front, so the call runs entirely independent of `editor`
@@ -1168,38 +293,6 @@ export default function Home() {
       const msg = err instanceof Error ? err.message : "Something went wrong";
       setEditJobs((jobs) => jobs.map((j) => (j.id === job.id ? { ...j, error: msg } : j)));
     }
-  }
-
-  function toggleDictation(onText: (text: string) => void, onUnsupported: () => void) {
-    if (listening) {
-      recognitionRef.current?.stop();
-      return;
-    }
-    type Recognition = {
-      lang: string; interimResults: boolean; continuous: boolean;
-      onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-      onend: (() => void) | null; onerror: (() => void) | null;
-      start: () => void; stop: () => void;
-    };
-    const w = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
-    const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-    if (!SR) {
-      onUnsupported();
-      return;
-    }
-    const rec = new SR();
-    rec.lang = navigator.language || "en-US";
-    rec.interimResults = false;
-    rec.continuous = false;
-    rec.onresult = (e) => {
-      const text = Array.from(e.results, (r) => r[0].transcript).join(" ").trim();
-      if (text) onText(text);
-    };
-    rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
-    recognitionRef.current = rec;
-    setListening(true);
-    rec.start();
   }
 
   function handleFile(file: File) {
@@ -1286,8 +379,8 @@ export default function Home() {
     setBackgroundPhotoPreview(bg.file);
     setSelectedPremadeBg(bg.id);
     setBgAspect(null);
-    setPetPos({ x: 50, y: 65 });
-    setPetScale(35);
+    setPetPos(DEFAULT_PET_POS);
+    setPetScale(DEFAULT_PET_SCALE);
   }
 
   async function handleGenerate() {
@@ -1368,6 +461,22 @@ export default function Home() {
     if (settings?.model) setEditModel(settings.model);
   }
 
+  // Leaves Compose entirely: clears the target, any cutout state, the chosen
+  // background and the pet placement. Model / ratio / resolution are left
+  // alone — they're preferences, not per-photo state.
+  function resetCompose() {
+    setComposeTarget(null);
+    setPetOriginalUrl(null);
+    setRefining(false);
+    setBackgroundPhoto(null);
+    setBackgroundPhotoPreview(null);
+    setSelectedPremadeBg(null);
+    setBgAspect(null);
+    setPetPos(DEFAULT_PET_POS);
+    setPetScale(DEFAULT_PET_SCALE);
+    setComposeError(null);
+  }
+
   function openCompose(img: GeneratedImage) {
     const cachedCutout = cutoutCache[img.url];
     setComposeTarget(cachedCutout ? { ...img, url: cachedCutout } : img);
@@ -1419,47 +528,14 @@ export default function Home() {
     setRefineZoom((z) => clamp(z * factor, 0.05, 8));
   }
 
-  // Multiplicative so a notch feels the same at 10px as at 100px, but always
-  // moves at least 1px so small sizes don't get stuck rounding back to
-  // themselves.
-  function stepBrush(size: number, deltaY: number) {
-    const next = deltaY < 0 ? Math.max(size + 1, size * 1.1) : Math.min(size - 1, size * 0.9);
-    return clamp(Math.round(next), 5, 120);
-  }
-
-  // Wheel over the canvas resizes the brush; Ctrl/⌘ + wheel zooms. Registered
-  // natively because React's wheel listener is passive, so preventDefault there
-  // wouldn't stop the page scrolling / browser zooming.
-  useEffect(() => {
-    const el = refineViewRef.current;
-    if (!el) return;
-    function onWheel(e: WheelEvent) {
-      e.preventDefault();
-      if (e.ctrlKey || e.metaKey) {
-        setRefineZoom((z) => clamp(z * (e.deltaY < 0 ? 1.12 : 0.89), 0.05, 8));
-      } else {
-        setRefineBrush((s) => stepBrush(s, e.deltaY));
-      }
-    }
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [refining]);
-
-  // Same behaviour for the inpaint editor canvas.
-  useEffect(() => {
-    const el = editorViewRef.current;
-    if (!el) return;
-    function onWheel(e: WheelEvent) {
-      e.preventDefault();
-      if (e.ctrlKey || e.metaKey) {
-        setCanvasZoom((z) => clamp(z * (e.deltaY < 0 ? 1.12 : 0.89), 0.5, 3));
-      } else {
-        setBrushSize((s) => stepBrush(s, e.deltaY));
-      }
-    }
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [editor]);
+  // Wheel = brush size, Ctrl/⌘ + wheel = zoom, on both canvases. The editor's
+  // view unmounts while Compose is open, hence the second condition.
+  useWheelBrushZoom(refineViewRef, refining, {
+    setZoom: setRefineZoom, zoomBounds: [0.05, 8], setBrush: setRefineBrush,
+  });
+  useWheelBrushZoom(editorViewRef, !!editor && !composeTarget, {
+    setZoom: setCanvasZoom, zoomBounds: [0.5, 3], setBrush: setBrushSize,
+  });
 
   async function applyRefinedCutout() {
     if (!composeTarget) return;
@@ -1564,15 +640,7 @@ export default function Home() {
         model: composeModel, sourceUrl: composeTarget.url, createdAt: composedAt,
       }));
       setHistory((h) => [...newImages, ...h]);
-      setComposeTarget(null);
-      setPetOriginalUrl(null);
-      setRefining(false);
-      setBackgroundPhoto(null);
-      setBackgroundPhotoPreview(null);
-      setSelectedPremadeBg(null);
-      setBgAspect(null);
-      setPetPos({ x: 50, y: 65 });
-      setPetScale(35);
+      resetCompose();
       setComposeAspectRatio("auto");
       setComposeResolution("2K");
     } catch (err) {
@@ -1582,35 +650,51 @@ export default function Home() {
     }
   }
 
-  const filteredHistory = history.filter((img) => {
-    const matchSearch = !historySearch || img.prompt.toLowerCase().includes(historySearch.toLowerCase());
-    const matchFilter = !historyFilter || img.model === historyFilter;
-    return matchSearch && matchFilter;
-  });
+  const filteredHistory = useMemo(() => {
+    const q = historySearch.toLowerCase();
+    return history.filter(
+      (img) => (!q || img.prompt.toLowerCase().includes(q)) && (!historyFilter || img.model === historyFilter)
+    );
+  }, [history, historySearch, historyFilter]);
 
   // Original pet photos you uploaded, so you can reuse one for a new
   // generation instead of digging up the file again. Blob storage is the
   // source of truth (works on any device); anything generated in this browser
   // since the last sync is unioned in so a fresh upload shows up immediately.
-  const originalPhotos = Array.from(
-    new Map([
-      ...originalUploads.map((u) => [u.url, u] as const),
-      ...history
-        // Locally-remembered uploadUrls from before the full-size fix point at
-        // the legacy padded canvases; the server already excludes those, so
-        // don't let stale localStorage put them back on the tab.
-        .filter((img) => img.uploadUrl?.includes("/petpho/originals/"))
-        .map((img) => [img.uploadUrl!, { url: img.uploadUrl!, createdAt: img.createdAt ?? 0 }] as const),
-    ]).values()
-  ).sort((a, b) => b.createdAt - a.createdAt);
+  const originalPhotos = useMemo(
+    () =>
+      Array.from(
+        new Map([
+          ...originalUploads.map((u) => [u.url, u] as const),
+          ...history
+            // Locally-remembered uploadUrls from before the full-size fix point at
+            // the legacy padded canvases; the server already excludes those, so
+            // don't let stale localStorage put them back on the tab.
+            .filter((img) => img.uploadUrl?.includes("/petpho/originals/"))
+            .map((img) => [img.uploadUrl!, { url: img.uploadUrl!, createdAt: img.createdAt ?? 0 }] as const),
+        ]).values()
+      ).sort((a, b) => b.createdAt - a.createdAt),
+    [originalUploads, history]
+  );
 
   const lightboxIndex = lightbox ? history.findIndex((img) => img.url === lightbox) : -1;
 
-  function navigateLightbox(delta: number) {
+  const navigateLightbox = useCallback((delta: number) => {
     if (lightboxIndex === -1) return;
     const next = lightboxIndex + delta;
     if (next >= 0 && next < history.length) setLightbox(history[next].url);
-  }
+  }, [lightboxIndex, history]);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { setLightbox(null); return; }
+      if (e.key === "ArrowLeft") navigateLightbox(-1);
+      else if (e.key === "ArrowRight") navigateLightbox(1);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox, navigateLightbox]);
 
   // The stage is shaped to the chosen output ratio so you can see the target
   // frame — but the photo itself is never cropped or letterbox-filled to
@@ -1618,14 +702,14 @@ export default function Home() {
   // with a dashed border marking how far the final canvas extends beyond it
   // (the model fills that extra area generatively at render time).
   const previewAspect =
-    composeAspectRatio !== "auto" ? aspectRatioToNumber(composeAspectRatio) : bgAspect ?? 16 / 9;
+    composeAspectRatio !== "auto" ? parseAspectRatio(composeAspectRatio) : bgAspect ?? 16 / 9;
 
   const imageAreaStyle = letterboxRect(bgAspect, previewAspect);
 
   // Same idea for the editor's Output Size: the canvas is shown at its own
   // natural size inside a dashed frame shaped like the chosen outpaint ratio.
   const editorPreviewAspect =
-    editor && editor.aspectRatio !== "original" ? aspectRatioToNumber(editor.aspectRatio) : editorImgAspect ?? 1;
+    editor && editor.aspectRatio !== "original" ? parseAspectRatio(editor.aspectRatio) : editorImgAspect ?? 1;
 
   // Size the photo would occupy if simply centred and uncropped — the 100%
   // reference that editorPhotoScale is a fraction of.
@@ -1776,21 +860,12 @@ export default function Home() {
 
   async function removeVideo(url: string) {
     setVideos((prev) => prev.filter((v) => v.url !== url));
-    await fetch("/api/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    }).catch(() => {});
+    await deleteBlob(url);
   }
 
   function navTo(tab: "generate" | "history" | "originals" | "video") {
     setEditor(null);
-    setComposeTarget(null);
-    setPetOriginalUrl(null);
-    setRefining(false);
-    setBackgroundPhoto(null);
-    setBackgroundPhotoPreview(null);
-    setComposeError(null);
+    resetCompose();
     setSelectMode(false);
     setSelectedUrls(new Set());
     setActiveTab(tab);
@@ -1820,11 +895,7 @@ export default function Home() {
 
   function removeFromHistory(url: string) {
     setHistory((h) => h.filter((x) => x.url !== url));
-    fetch("/api/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    }).catch(() => {});
+    void deleteBlob(url);
   }
 
   function toggleSelected(url: string) {
@@ -1845,13 +916,7 @@ export default function Home() {
     if (!confirm(`Delete ${selectedUrls.size} image${selectedUrls.size !== 1 ? "s" : ""}? This can't be undone.`)) return;
     const urls = Array.from(selectedUrls);
     setHistory((h) => h.filter((x) => !selectedUrls.has(x.url)));
-    urls.forEach((url) => {
-      fetch("/api/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      }).catch(() => {});
-    });
+    urls.forEach((url) => void deleteBlob(url));
     setSelectedUrls(new Set());
     setSelectMode(false);
   }
@@ -1866,18 +931,10 @@ export default function Home() {
     setHistory((h) =>
       h.map((img) => (img.uploadUrl && selectedUrls.has(img.uploadUrl) ? { ...img, uploadUrl: undefined } : img))
     );
-    urls.forEach((url) => {
-      fetch("/api/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      }).catch(() => {});
-    });
+    urls.forEach((url) => void deleteBlob(url));
     setSelectedUrls(new Set());
     setSelectMode(false);
   }
-
-  const errorBox = "text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2 animate-fade-in";
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f6f6f7] text-zinc-800">
@@ -1955,7 +1012,7 @@ export default function Home() {
             <aside className={`w-[264px] ${floatCard} flex flex-col gap-4 p-4 overflow-y-auto flex-shrink-0 m-6 mr-3`}>
               <div className="flex items-center gap-2.5">
                 <button
-                  onClick={() => { setComposeTarget(null); setPetOriginalUrl(null); setRefining(false); setBackgroundPhoto(null); setBackgroundPhotoPreview(null); setSelectedPremadeBg(null); setBgAspect(null); setComposeError(null); }}
+                  onClick={resetCompose}
                   className="w-7 h-7 rounded-full bg-black/[0.04] hover:bg-black/[0.1] text-zinc-600 hover:text-zinc-900 transition-all flex items-center justify-center text-sm flex-shrink-0"
                 >
                   ←
@@ -2681,7 +1738,7 @@ export default function Home() {
                         // Keep the resolution on something this model actually offers.
                         const opts = getModelConfig(id).supportedResolutions;
                         if (opts && !opts.includes(resolution)) setResolution(opts[0]);
-                      }} compact />
+                      }} />
                       <div className="flex flex-col gap-2">
                         <label className={label}>Art Style</label>
                         <div className="flex flex-wrap gap-1.5">
@@ -3395,9 +2452,9 @@ export default function Home() {
           </button>
 
           <div className="flex-1 flex items-center justify-center p-8 min-w-0">
-            <Image src={lightbox} alt="Preview" width={1024} height={1024}
+            <img src={lightbox} alt="Preview"
               className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl animate-scale-in"
-              unoptimized priority onClick={(e) => e.stopPropagation()} />
+              onClick={(e) => e.stopPropagation()} />
           </div>
 
           <button

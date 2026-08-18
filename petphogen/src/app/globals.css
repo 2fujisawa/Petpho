@@ -3,7 +3,6 @@
 body {
   background-color: #f6f6f7;
   color: #18181b;
-  -webkit-font-smoothing: antialiased;
 }
 
 ::selection {

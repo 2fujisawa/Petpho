@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import sharp from "@/lib/sharpConfig";
+import { clamp } from "@/lib/geometry";
 import { rehostAll, rehostGeneratedBuffer } from "@/lib/storage";
 import { runModel, describeModelError } from "@/lib/replicateRun";
 import {
@@ -18,10 +19,6 @@ const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 // input image. To offer a resolution choice anyway, upscale the result
 // afterward to the chosen long-edge pixel size.
 const RESOLUTION_PX: Record<string, number> = { "1K": 1024, "2K": 2048, "4K": 4096 };
-
-function clamp(n: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, n));
-}
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -248,7 +245,7 @@ export async function POST(req: NextRequest) {
           `Match the existing Disney Pixar 3D animated style: ${styleSuffix}.`,
         output_format: config.outputFormat,
         ...(aspect ? { aspect_ratio: aspect } : {}),
-        ...(nativeRes ? { resolution: nativeRes } : {}),
+        ...(nativeRes ? { [config.resolutionParam ?? "resolution"]: nativeRes } : {}),
         ...config.extraInput,
         ...buildComposeImageInput(config, [markedUrl]),
       });

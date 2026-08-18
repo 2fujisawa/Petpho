@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 import sharp from "@/lib/sharpConfig";
+import { clamp } from "@/lib/geometry";
 import { rehostAll } from "@/lib/storage";
 import { runModel, describeModelError, isTransientModelError } from "@/lib/replicateRun";
 import {
@@ -16,10 +17,6 @@ import {
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
 });
-
-function clamp(n: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, n));
-}
 
 export async function POST(req: NextRequest) {
   const formData = await req.formData();

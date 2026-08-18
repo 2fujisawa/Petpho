@@ -1,3 +1,5 @@
+import { parseAspectRatio } from "./geometry";
+
 export type ModelId =
   | "black-forest-labs/flux-kontext-pro"
   | "black-forest-labs/flux-fill-pro"
@@ -13,7 +15,7 @@ export type ModelConfig = {
   imageIsArray: boolean;
   outputFormat: string;
   extraInput?: Record<string, unknown>;
-  // Enum of aspect_ratio values this model actually accepts (compose models only).
+  // Enum of aspect_ratio values this model actually accepts (edit/compose flows).
   // Include "match_input_image" if the model supports it as a literal value.
   supportedAspectRatios?: string[];
   // Enum of resolution values this model accepts (e.g. ["1K", "2K", "4K"]).
@@ -29,45 +31,105 @@ export type ModelConfig = {
   usesMask?: boolean;
 };
 
-export const MODELS: ModelConfig[] = [
+// The three places a model can be offered. A model's technical shape (input
+// param names, output format, supported ratios) is the same everywhere; only
+// the one-line pitch differs by role.
+type ModelRole = "generate" | "edit" | "compose";
+
+type CatalogEntry = Omit<ModelConfig, "description"> & {
+  // Description shown for each role the model is offered in. A role that is
+  // absent here means the model isn't offered there.
+  roles: Partial<Record<ModelRole, string>>;
+};
+
+// Single source of truth for every image model. Order here is the order the
+// UI lists them in, within each role.
+const CATALOG: CatalogEntry[] = [
   {
     id: "black-forest-labs/flux-kontext-pro",
     name: "Flux Kontext Pro",
     provider: "Black Forest Labs",
-    description: "Best identity preservation & instruction-following edits",
     imageParam: "input_image",
     imageIsArray: false,
     outputFormat: "jpg",
+    roles: {
+      generate: "Best identity preservation & instruction-following edits",
+    },
+  },
+  {
+    id: "black-forest-labs/flux-fill-pro",
+    name: "Flux Fill Pro",
+    provider: "Black Forest Labs",
+    imageParam: "image",
+    imageIsArray: false,
+    outputFormat: "jpg",
+    usesMask: true,
+    roles: {
+      edit: "Repaints exactly inside your brush — best for touch-ups & removals",
+    },
   },
   {
     id: "google/nano-banana-pro",
     name: "Nano Banana Pro",
     provider: "Google (Gemini 3 Pro)",
-    description: "Highest quality — the only model with 1K/2K/4K output",
     imageParam: "image_input",
     imageIsArray: true,
     outputFormat: "jpg",
+    supportedAspectRatios: ["match_input_image", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
     supportedResolutions: ["1K", "2K", "4K"],
+    roles: {
+      generate: "Highest quality — the only model with 1K/2K/4K output",
+      edit: "Much better at adding new objects — edits the whole frame from your description",
+      compose: "Best overall — strongest lighting & shadow matching",
+    },
   },
   {
     id: "openai/gpt-image-2",
     name: "GPT Image 2",
     provider: "OpenAI",
-    description: "Excellent instruction-following & multi-image compositing",
     imageParam: "input_images",
     imageIsArray: true,
     outputFormat: "jpeg",
     extraInput: { background: "opaque" },
+    supportedAspectRatios: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
     supportedResolutions: ["low", "medium", "high"],
     resolutionParam: "quality",
+    roles: {
+      generate: "Excellent instruction-following & multi-image compositing",
+      edit: "Strong instruction-following for complex object edits",
+      compose: "Strong instruction-following for complex scene placement",
+    },
   },
 ];
 
+function modelsFor(role: ModelRole): ModelConfig[] {
+  return CATALOG.flatMap(({ roles, ...base }) => {
+    const description = roles[role];
+    return description ? [{ ...base, description }] : [];
+  });
+}
+
+// Models offered in the generator.
+export const MODELS: ModelConfig[] = modelsFor("generate");
 export const DEFAULT_MODEL: ModelId = "black-forest-labs/flux-kontext-pro";
 
-export function getModelConfig(id: string): ModelConfig {
-  return MODELS.find((m) => m.id === id) ?? MODELS[0];
+// Models offered in the inpaint editor. Only Flux Fill Pro repaints strictly
+// inside the brushed mask; the others are far stronger at inventing new objects
+// but rewrite the whole frame, so the brush is passed to them as a marked-up
+// reference image instead of an enforced boundary.
+export const EDIT_MODELS: ModelConfig[] = modelsFor("edit");
+export const DEFAULT_EDIT_MODEL: ModelId = "black-forest-labs/flux-fill-pro";
+
+// Models capable of blending two distinct images (subject + background) into one scene.
+export const COMPOSE_MODELS: ModelConfig[] = modelsFor("compose");
+export const DEFAULT_COMPOSE_MODEL: ModelId = "google/nano-banana-pro";
+
+function pick(list: ModelConfig[], id: string): ModelConfig {
+  return list.find((m) => m.id === id) ?? list[0];
 }
+export const getModelConfig = (id: string) => pick(MODELS, id);
+export const getEditModelConfig = (id: string) => pick(EDIT_MODELS, id);
+export const getComposeModelConfig = (id: string) => pick(COMPOSE_MODELS, id);
 
 export function buildImageInput(
   config: ModelConfig,
@@ -78,49 +140,11 @@ export function buildImageInput(
   };
 }
 
-// Models offered in the inpaint editor. Only Flux Fill Pro repaints strictly
-// inside the brushed mask; the others are far stronger at inventing new objects
-// but rewrite the whole frame, so the brush is passed to them as a marked-up
-// reference image instead of an enforced boundary.
-export const EDIT_MODELS: ModelConfig[] = [
-  {
-    id: "black-forest-labs/flux-fill-pro",
-    name: "Flux Fill Pro",
-    provider: "Black Forest Labs",
-    description: "Repaints exactly inside your brush — best for touch-ups & removals",
-    imageParam: "image",
-    imageIsArray: false,
-    outputFormat: "jpg",
-    usesMask: true,
-  },
-  {
-    id: "google/nano-banana-pro",
-    name: "Nano Banana Pro",
-    provider: "Google (Gemini 3 Pro)",
-    description: "Much better at adding new objects — edits the whole frame from your description",
-    imageParam: "image_input",
-    imageIsArray: true,
-    outputFormat: "jpg",
-    supportedAspectRatios: ["match_input_image", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
-    supportedResolutions: ["1K", "2K", "4K"],
-  },
-  {
-    id: "openai/gpt-image-2",
-    name: "GPT Image 2",
-    provider: "OpenAI",
-    description: "Strong instruction-following for complex object edits",
-    imageParam: "input_images",
-    imageIsArray: true,
-    outputFormat: "jpeg",
-    extraInput: { background: "opaque" },
-    supportedAspectRatios: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
-  },
-];
-
-export const DEFAULT_EDIT_MODEL: ModelId = "black-forest-labs/flux-fill-pro";
-
-export function getEditModelConfig(id: string): ModelConfig {
-  return EDIT_MODELS.find((m) => m.id === id) ?? EDIT_MODELS[0];
+export function buildComposeImageInput(
+  config: ModelConfig,
+  images: string[]
+): Record<string, string[]> {
+  return { [config.imageParam]: images };
 }
 
 // ── Video ────────────────────────────────────────────────────────────────
@@ -176,47 +200,6 @@ export function getVideoModelConfig(id: string): VideoModelConfig {
   return VIDEO_MODELS.find((m) => m.id === id) ?? VIDEO_MODELS[0];
 }
 
-// Models capable of blending two distinct images (subject + background) into one scene
-export const COMPOSE_MODELS: ModelConfig[] = [
-  {
-    id: "google/nano-banana-pro",
-    name: "Nano Banana Pro",
-    provider: "Google (Gemini 3 Pro)",
-    description: "Best overall — strongest lighting & shadow matching",
-    imageParam: "image_input",
-    imageIsArray: true,
-    outputFormat: "jpg",
-    supportedAspectRatios: ["match_input_image", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
-    supportedResolutions: ["1K", "2K", "4K"],
-  },
-  {
-    id: "openai/gpt-image-2",
-    name: "GPT Image 2",
-    provider: "OpenAI",
-    description: "Strong instruction-following for complex scene placement",
-    imageParam: "input_images",
-    imageIsArray: true,
-    outputFormat: "jpeg",
-    extraInput: { background: "opaque" },
-    supportedAspectRatios: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
-    supportedResolutions: ["low", "medium", "high"],
-    resolutionParam: "quality",
-  },
-];
-
-export const DEFAULT_COMPOSE_MODEL: ModelId = "google/nano-banana-pro";
-
-export function getComposeModelConfig(id: string): ModelConfig {
-  return COMPOSE_MODELS.find((m) => m.id === id) ?? COMPOSE_MODELS[0];
-}
-
-export function buildComposeImageInput(
-  config: ModelConfig,
-  images: string[]
-): Record<string, string[]> {
-  return { [config.imageParam]: images };
-}
-
 function snapAspectRatio(targetRatio: number, options: string[]): string {
   let best = options[0];
   let bestDiff = Infinity;
@@ -253,11 +236,6 @@ export function resolveComposeAspectRatio(
 
   if (options.includes("match_input_image")) return "match_input_image";
   return snapAspectRatio(bgWidth / bgHeight, options);
-}
-
-function parseAspectRatio(value: string): number {
-  const [w, h] = value.split(":").map(Number);
-  return w && h ? w / h : 1;
 }
 
 // Resolve the resolution value to send for a model. Returns undefined when the

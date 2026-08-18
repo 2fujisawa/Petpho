@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Image from "next/image";
 
 function LoginForm() {
   const [password, setPassword] = useState("");
@@ -122,9 +123,12 @@ export default function LoginPage() {
         <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_48px_rgba(0,0,0,0.09)] p-8">
           <div className="flex flex-col items-center gap-3 mb-8">
             <div className="animate-float logo-glow">
-              <img
+              <Image
                 src="/logo.png"
                 alt="Petpho mascot"
+                width={112}
+                height={112}
+                priority
                 className="w-28 h-28 rounded-full object-cover"
               />
             </div>
