@@ -7,7 +7,7 @@ import { blobAuth, storageConfigured } from "@/lib/storage";
 // they can be reused later from any browser — the client's own uploadUrl only
 // lives in localStorage and is lost on a different device.
 export async function GET() {
-  if (!storageConfigured()) {
+  if (!(await storageConfigured())) {
     return NextResponse.json({ images: [], uploads: [], videos: [] });
   }
 
@@ -18,7 +18,7 @@ export async function GET() {
     let cursor: string | undefined;
 
     do {
-      const res = await list({ prefix: "petpho/", cursor, limit: 1000, ...blobAuth() });
+      const res = await list({ prefix: "petpho/", cursor, limit: 1000, ...(await blobAuth()) });
       for (const blob of res.blobs) {
         const createdAt = new Date(blob.uploadedAt).getTime();
         // originals/ holds the real reference photos at full size — the only

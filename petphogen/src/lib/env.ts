@@ -89,37 +89,12 @@ export function requireEnv(key: EnvKey): string {
   return process.env[key]!;
 }
 
-// Blob accepts either credential path, so neither key is required on its own —
-// only the pair being *both* absent is a real problem.
-export function storageConfigured(): boolean {
-  return (
-    !!process.env.BLOB_READ_WRITE_TOKEN?.trim() ||
-    !!(process.env.VERCEL_OIDC_TOKEN?.trim() && process.env.BLOB_STORE_ID?.trim())
-  );
-}
-
-function inspectStorage(): ConfigIssue | null {
-  if (storageConfigured()) return null;
-  return {
-    key: "BLOB_READ_WRITE_TOKEN",
-    feature: "Saving results to permanent storage",
-    problem: "missing",
-    message:
-      "Saving results to permanent storage is unavailable: no Blob credentials found. " +
-      "Connect the Blob store to this project (Vercel → Storage → your store → Projects → " +
-      "Connect to Project, including this environment), then run `vercel env pull`. " +
-      "Without it, generated images fall back to Replicate URLs that expire in about an hour.",
-  };
-}
-
 // Everything wrong with the current environment, for the status endpoint.
 // Checks shape only — no network calls, no secret values ever returned.
 export function checkConfig(): ConfigIssue[] {
-  const issues = (Object.keys(SPECS) as EnvKey[])
+  return (Object.keys(SPECS) as EnvKey[])
     .map(inspect)
     .filter((i): i is ConfigIssue => i !== null);
-  const storage = inspectStorage();
-  return storage ? [...issues, storage] : issues;
 }
 
 // Message for a credential the provider actively rejected. Shape can't catch
@@ -127,4 +102,16 @@ export function checkConfig(): ConfigIssue[] {
 export function rejectedMessage(key: EnvKey): string {
   const spec = SPECS[key];
   return `${spec.feature} is unavailable: ${key} was rejected — it's set, but no longer valid (usually revoked or rotated). ${spec.how} Update it in ${location()}.`;
+}
+
+// Storage is the one capability with two possible credential paths, and the
+// live one can only be resolved inside a request (the OIDC token arrives as a
+// header in Functions), so the check itself lives in /api/status.
+export function storageMissingMessage(): string {
+  return (
+    "Saving results to permanent storage is unavailable: no Blob credentials found. " +
+    "Connect the Blob store to this project (Vercel → Storage → your store → Projects → " +
+    "Connect to Project, including this environment) and redeploy. Without it, generated " +
+    "images fall back to Replicate URLs that expire in about an hour."
+  );
 }

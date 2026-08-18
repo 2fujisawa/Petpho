@@ -1,7 +1,5 @@
 import { put } from "@vercel/blob";
-import { storageConfigured } from "./env";
-
-export { storageConfigured };
+import { headers } from "next/headers";
 
 // Every upload lands under this prefix; /api/history lists it and sorts by
 // sub-folder. `null` = the generated-image gallery itself.
@@ -42,22 +40,52 @@ async function retry<T>(attempts: number, fn: () => Promise<T>): Promise<T> {
   throw lastErr;
 }
 
+// Where the OIDC token lives depends on *where the code is running*, and this
+// is the detail that silently breaks Blob in production:
+//   - builds and local dev (after `vercel env pull`) get VERCEL_OIDC_TOKEN in
+//     the environment;
+//   - a running Function does NOT. Vercel puts the token on the request as the
+//     `x-vercel-oidc-token` header instead.
+// next/headers reads the current request's headers, so this resolves correctly
+// in both places. It throws outside a request scope (a build, a script), which
+// is exactly when the environment variable is the right answer anyway.
+async function oidcToken(): Promise<string | undefined> {
+  const fromEnv = process.env.VERCEL_OIDC_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    return (await headers()).get("x-vercel-oidc-token")?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Credentials for a Blob call.
 //
-// The SDK resolves auth in this order: an explicit `token` option, then OIDC
-// (VERCEL_OIDC_TOKEN + BLOB_STORE_ID), then process.env.BLOB_READ_WRITE_TOKEN.
-// An explicit token *always* wins — including over OIDC — so it is only passed
-// when one is actually set. That leaves OIDC as the normal path (it rotates
-// automatically, so there is no long-lived secret to leak) while a static
-// token still works as a fallback for anything running off Vercel.
-export function blobAuth(): { token?: string } {
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
-  return token ? { token } : {};
+// The SDK resolves auth in this order: an explicit `token`, then OIDC
+// (oidcToken + storeId), then process.env.BLOB_READ_WRITE_TOKEN. An explicit
+// token *always* wins — including over OIDC — so it is only passed when one is
+// actually set. That leaves OIDC as the normal path (it rotates on its own, so
+// there is no long-lived secret to leak) while a static token still works as a
+// fallback for anything running off Vercel.
+export async function blobAuth(): Promise<
+  { token: string } | { oidcToken: string; storeId: string } | Record<string, never>
+> {
+  const token = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+  if (token) return { token };
+  const oidc = await oidcToken();
+  const storeId = process.env.BLOB_STORE_ID?.trim();
+  return oidc && storeId ? { oidcToken: oidc, storeId } : {};
+}
+
+// True when at least one credential path is actually usable right now.
+export async function storageConfigured(): Promise<boolean> {
+  return Object.keys(await blobAuth()).length > 0;
 }
 
 // The one place that talks to Blob.
 async function putBlob(pathname: string, body: Buffer | ArrayBuffer, contentType: string) {
-  if (!storageConfigured()) {
+  const auth = await blobAuth();
+  if (Object.keys(auth).length === 0) {
     throw new Error(
       "Storage is not configured — needs either OIDC (connect the Blob store to this " +
         "project, then run `vercel env pull`) or BLOB_READ_WRITE_TOKEN."
@@ -66,7 +94,7 @@ async function putBlob(pathname: string, body: Buffer | ArrayBuffer, contentType
   const { url } = await put(pathname, toPlainBytes(body), {
     access: "public",
     contentType,
-    ...blobAuth(),
+    ...auth,
   });
   return url;
 }
@@ -79,7 +107,7 @@ async function putBlob(pathname: string, body: Buffer | ArrayBuffer, contentType
 // into a dead "Expired" card that can never be recovered — the bytes are gone.
 // So: retry before giving up, and always say loudly when it didn't work.
 export async function rehost(replicateUrl: string): Promise<string> {
-  if (!storageConfigured()) {
+  if (!(await storageConfigured())) {
     console.error("rehost: storage not configured — image will expire in ~1h");
     return replicateUrl;
   }
@@ -114,7 +142,7 @@ export async function rehostAll(urls: string[]): Promise<string[]> {
 export async function rehostVideo(
   replicateUrl: string
 ): Promise<{ url: string; archived: boolean }> {
-  if (!storageConfigured()) {
+  if (!(await storageConfigured())) {
     console.error("rehostVideo: storage not configured — clip will expire");
     return { url: replicateUrl, archived: false };
   }

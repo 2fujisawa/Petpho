@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await del(url, blobAuth());
+    await del(url, await blobAuth());
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("Blob delete error:", err);

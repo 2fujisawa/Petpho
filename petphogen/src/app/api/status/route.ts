@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { list } from "@vercel/blob";
-import { checkConfig, rejectedMessage, storageConfigured, type ConfigIssue } from "@/lib/env";
-import { blobAuth } from "@/lib/storage";
+import { checkConfig, rejectedMessage, storageMissingMessage, type ConfigIssue } from "@/lib/env";
+import { blobAuth, storageConfigured } from "@/lib/storage";
 
 // Reports whether this deployment is actually able to do its job, so the
 // studio can say so on load rather than letting someone upload a photo, wait,
@@ -38,6 +38,19 @@ export async function GET() {
   const issues = checkConfig();
   const brokenKeys = new Set(issues.map((i) => i.key));
 
+  // Resolved per-request: in a Function the OIDC token is a request header, not
+  // an environment variable, so this cannot be answered by checkConfig().
+  const hasStorage = await storageConfigured();
+  if (!hasStorage) {
+    issues.push({
+      key: "BLOB_READ_WRITE_TOKEN",
+      feature: "Saving results to permanent storage",
+      problem: "missing",
+      message: storageMissingMessage(),
+    });
+    brokenKeys.add("BLOB_READ_WRITE_TOKEN");
+  }
+
   type Rejected = { key: "REPLICATE_API_TOKEN" | "BLOB_READ_WRITE_TOKEN"; feature: string };
   const ok: Promise<Rejected | null> = Promise.resolve(null);
 
@@ -50,9 +63,9 @@ export async function GET() {
         ),
     // Goes through the SDK rather than a bare bearer request, so it exercises
     // whichever credential is actually in play — OIDC or a static token.
-    !storageConfigured() || brokenKeys.has("BLOB_READ_WRITE_TOKEN")
+    brokenKeys.has("BLOB_READ_WRITE_TOKEN")
       ? ok
-      : list({ limit: 1, ...blobAuth() }).then(
+      : list({ limit: 1, ...(await blobAuth()) }).then(
           (): Rejected | null => null,
           (): Rejected | null => ({
             key: "BLOB_READ_WRITE_TOKEN",
