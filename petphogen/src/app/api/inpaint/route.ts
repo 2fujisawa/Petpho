@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import Replicate from "replicate";
+import { getReplicate } from "@/lib/replicate";
+import { errorResponse } from "@/lib/routeError";
 import sharp from "@/lib/sharpConfig";
 import { clamp } from "@/lib/geometry";
 import { rehostAll, rehostGeneratedBuffer } from "@/lib/storage";
-import { runModel, describeModelError } from "@/lib/replicateRun";
+import { runModel } from "@/lib/replicateRun";
 import {
   getEditModelConfig,
   buildComposeImageInput,
@@ -13,14 +14,23 @@ import {
   DEFAULT_EDIT_MODEL,
 } from "@/lib/models";
 
-const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
-
 // Flux Fill Pro has no resolution input — output size always matches the
 // input image. To offer a resolution choice anyway, upscale the result
 // afterward to the chosen long-edge pixel size.
 const RESOLUTION_PX: Record<string, number> = { "1K": 1024, "2K": 2048, "4K": 4096 };
 
+// Two model passes plus several sharp operations can outlast the platform default,
+// and a timeout here throws away work Replicate has already billed for.
+export const maxDuration = 300;
+
 export async function POST(req: NextRequest) {
+  let replicate: ReturnType<typeof getReplicate>;
+  try {
+    replicate = getReplicate();
+  } catch (err) {
+    return errorResponse(err, "Photo editing");
+  }
+
   const body = await req.json();
   const { imageUrl, maskDataUrl, prompt, aspectRatio, photoX, photoY, photoScale, model } = body;
   // Reassigned below when the model renders at the target resolution natively,
@@ -278,7 +288,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ images });
   } catch (err) {
     console.error("Inpaint error:", err);
-    return NextResponse.json({ error: describeModelError(err, config.name) }, { status: 500 });
+    return errorResponse(err, config.name);
   } finally {
     await Promise.all(
       uploads.map((f) => replicate.files.delete(f.id).catch(() => {}))

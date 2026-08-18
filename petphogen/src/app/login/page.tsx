@@ -30,7 +30,14 @@ function LoginForm() {
       });
 
       if (!res.ok) {
-        setError("Incorrect password. Try again.");
+        // A 503 means the deployment itself isn't configured; that message
+        // explains what to set and is worth showing verbatim.
+        const data = await res.json().catch(() => null);
+        setError(
+          res.status === 503 && data?.error
+            ? data.error
+            : "Incorrect password. Try again."
+        );
         setPassword("");
         inputRef.current?.focus();
         return;

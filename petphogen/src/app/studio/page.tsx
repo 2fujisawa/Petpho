@@ -16,10 +16,11 @@ import { deleteBlob } from "@/lib/api";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { useDictation } from "@/hooks/useDictation";
 import { useWheelBrushZoom } from "@/hooks/useWheelBrushZoom";
-import type { GeneratedImage, EditorState, EditJob, GeneratedVideo, VideoJob } from "@/types/studio";
+import type { GeneratedImage, EditorState, EditJob, GeneratedVideo, VideoJob, ConfigIssue } from "@/types/studio";
 import { InpaintCanvas, type InpaintCanvasHandle } from "@/components/studio/InpaintCanvas";
 import { CutoutRefiner, type CutoutRefinerHandle } from "@/components/studio/CutoutRefiner";
 import { ImageCard } from "@/components/studio/ImageCard";
+import { ConfigBanner } from "@/components/studio/ConfigBanner";
 import {
   label, chipOff, chipOn, floatCard, selectBox, overlayChip, errorBox,
   ModelSwitcher, ModelDropdown, Chevron, SlidersIcon, MicIcon, GridSizeSlider, SelectToolbar,
@@ -171,6 +172,10 @@ export default function StudioPage() {
   const [videoAudio, setVideoAudio] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
 
+  // Problems with this deployment's environment (missing/revoked API tokens),
+  // so the studio can warn up front instead of failing mid-generation.
+  const [configIssues, setConfigIssues] = useState<ConfigIssue[]>([]);
+
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
   const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
@@ -227,6 +232,13 @@ export default function StudioPage() {
       })
       .catch(() => {});
   }, [setHistory, setVideos]);
+
+  useEffect(() => {
+    fetch("/api/status")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { issues?: ConfigIssue[] } | null) => setConfigIssues(data?.issues ?? []))
+      .catch(() => {});
+  }, []);
 
   // Fire-and-forget by design: everything the request needs is captured into
   // `snapshot` up front, so the call runs entirely independent of `editor`
@@ -1004,7 +1016,10 @@ export default function StudioPage() {
       </nav>
 
       {/* ── Main content ─────────────────────────────────────── */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <ConfigBanner issues={configIssues} />
+
+        <div className="flex-1 flex overflow-hidden">
 
         {/* COMPOSE VIEW */}
         {composeTarget && (
@@ -2326,6 +2341,7 @@ export default function StudioPage() {
             </div>
           </div>
         )}
+        </div>
       </div>
 
       {/* Cutout touch-up */}

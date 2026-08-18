@@ -1,4 +1,5 @@
 import type Replicate from "replicate";
+import { ConfigError, rejectedMessage } from "./env";
 
 // Replicate reports upstream capacity problems as a *failed prediction*, not an
 // HTTP status — by the time it reaches us it's a plain Error whose message is
@@ -15,12 +16,29 @@ export function isTransientModelError(err: unknown): boolean {
   return err instanceof Error && TRANSIENT.test(err.message);
 }
 
+// A credential the provider refused. Deliberately separate from TRANSIENT:
+// retrying a rejected token just burns time, and the fix is a configuration
+// change, not a wait. Replicate reports these as a plain Error whose message
+// carries the HTTP status, so matching the message is the only option.
+const AUTH =
+  /\b(401|403)\b|Unauthorized|Invalid token|authentication failed|invalid api (key|token)/i;
+
+export function isAuthError(err: unknown): boolean {
+  return err instanceof Error && AUTH.test(err.message);
+}
+
 // Each layer (Replicate SDK, prediction poller, provider) prepends its own
 // "…failed:" prefix, so the raw message arrives as "Prediction failed:
 // Prediction failed: Async prediction failed: ModelRateLimitError: …". Strip
 // the stack and, for the capacity case, say what the user can actually do.
 export function describeModelError(err: unknown, modelName: string): string {
   const raw = err instanceof Error ? err.message : "Something went wrong";
+  // Already a written-for-humans configuration message — pass it straight on.
+  if (err instanceof ConfigError) return err.message;
+  // Otherwise the raw text is an SDK dump ("Request to https://api.replicate.com/
+  // v1/files failed with status 401 Unauthorized: {"detail":"Invalid token"}"),
+  // which tells the reader nothing about what to change.
+  if (isAuthError(err)) return rejectedMessage("REPLICATE_API_TOKEN");
   if (isTransientModelError(err)) {
     return (
       `${modelName} is busy right now — the model provider is at capacity, so this isn't ` +

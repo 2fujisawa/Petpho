@@ -53,3 +53,13 @@ export type VideoJob = {
   model: VideoModelId;
   error?: string;
 };
+
+// A problem with this deployment's environment configuration, surfaced by
+// /api/status so the studio can warn before any work is attempted.
+// Carries no secret — only which key is wrong and how to fix it.
+export type ConfigIssue = {
+  key: string;
+  feature: string;
+  problem: "missing" | "malformed" | "rejected";
+  message: string;
+};

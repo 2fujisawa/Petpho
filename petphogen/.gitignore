@@ -28,8 +28,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — real secrets never get committed, but the template must be,
+# otherwise a teammate cloning the repo has no idea what to set.
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -43,3 +45,4 @@ next-env.d.ts
 /.agents
 /skills-lock.json
 /.claude
+.env*.local

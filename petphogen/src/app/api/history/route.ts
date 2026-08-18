@@ -1,12 +1,13 @@
 import { list } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { blobAuth, storageConfigured } from "@/lib/storage";
 
 // Lists generated images stored in Blob so history survives across browsers/devices.
 // Also returns the original pet photos that were uploaded to produce them, so
 // they can be reused later from any browser — the client's own uploadUrl only
 // lives in localStorage and is lost on a different device.
 export async function GET() {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  if (!storageConfigured()) {
     return NextResponse.json({ images: [], uploads: [], videos: [] });
   }
 
@@ -17,14 +18,7 @@ export async function GET() {
     let cursor: string | undefined;
 
     do {
-      // Explicit token: with BLOB_STORE_ID set, the SDK otherwise prefers OIDC
-      // auth, which is not enabled for local development.
-      const res = await list({
-        prefix: "petpho/",
-        cursor,
-        limit: 1000,
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      });
+      const res = await list({ prefix: "petpho/", cursor, limit: 1000, ...blobAuth() });
       for (const blob of res.blobs) {
         const createdAt = new Date(blob.uploadedAt).getTime();
         // originals/ holds the real reference photos at full size — the only

@@ -1,4 +1,7 @@
 import { put } from "@vercel/blob";
+import { storageConfigured } from "./env";
+
+export { storageConfigured };
 
 // Every upload lands under this prefix; /api/history lists it and sorts by
 // sub-folder. `null` = the generated-image gallery itself.
@@ -39,13 +42,32 @@ async function retry<T>(attempts: number, fn: () => Promise<T>): Promise<T> {
   throw lastErr;
 }
 
-// The one place that talks to Blob.
-// Explicit token: with BLOB_STORE_ID set, the SDK otherwise prefers OIDC
-// auth, which is not enabled for local development.
-async function putBlob(pathname: string, body: Buffer | ArrayBuffer, contentType: string) {
+// Credentials for a Blob call.
+//
+// The SDK resolves auth in this order: an explicit `token` option, then OIDC
+// (VERCEL_OIDC_TOKEN + BLOB_STORE_ID), then process.env.BLOB_READ_WRITE_TOKEN.
+// An explicit token *always* wins — including over OIDC — so it is only passed
+// when one is actually set. That leaves OIDC as the normal path (it rotates
+// automatically, so there is no long-lived secret to leak) while a static
+// token still works as a fallback for anything running off Vercel.
+export function blobAuth(): { token?: string } {
   const token = process.env.BLOB_READ_WRITE_TOKEN;
-  if (!token) throw new Error("Storage is not configured (BLOB_READ_WRITE_TOKEN is missing)");
-  const { url } = await put(pathname, toPlainBytes(body), { access: "public", contentType, token });
+  return token ? { token } : {};
+}
+
+// The one place that talks to Blob.
+async function putBlob(pathname: string, body: Buffer | ArrayBuffer, contentType: string) {
+  if (!storageConfigured()) {
+    throw new Error(
+      "Storage is not configured — needs either OIDC (connect the Blob store to this " +
+        "project, then run `vercel env pull`) or BLOB_READ_WRITE_TOKEN."
+    );
+  }
+  const { url } = await put(pathname, toPlainBytes(body), {
+    access: "public",
+    contentType,
+    ...blobAuth(),
+  });
   return url;
 }
 
@@ -57,8 +79,8 @@ async function putBlob(pathname: string, body: Buffer | ArrayBuffer, contentType
 // into a dead "Expired" card that can never be recovered — the bytes are gone.
 // So: retry before giving up, and always say loudly when it didn't work.
 export async function rehost(replicateUrl: string): Promise<string> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    console.error("rehost: BLOB_READ_WRITE_TOKEN missing — image will expire in ~1h");
+  if (!storageConfigured()) {
+    console.error("rehost: storage not configured — image will expire in ~1h");
     return replicateUrl;
   }
   try {
@@ -92,8 +114,8 @@ export async function rehostAll(urls: string[]): Promise<string[]> {
 export async function rehostVideo(
   replicateUrl: string
 ): Promise<{ url: string; archived: boolean }> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    console.error("rehostVideo: BLOB_READ_WRITE_TOKEN missing — clip will expire");
+  if (!storageConfigured()) {
+    console.error("rehostVideo: storage not configured — clip will expire");
     return { url: replicateUrl, archived: false };
   }
   try {

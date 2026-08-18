@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import Replicate from "replicate";
+import { getReplicate } from "@/lib/replicate";
+import { errorResponse } from "@/lib/routeError";
 import {
   getModelConfig,
   buildImageInput,
@@ -13,16 +14,13 @@ import {
 } from "@/lib/models";
 import { getStyleConfig, buildStylePrompt, buildStyleBackgroundPrompt } from "@/lib/styles";
 import { rehostAll, rehostBuffer } from "@/lib/storage";
-import { runModel, describeModelError, isTransientModelError } from "@/lib/replicateRun";
-
-const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN,
-});
+import { runModel, isTransientModelError } from "@/lib/replicateRun";
 
 // Retry/backoff lives in runModel — this used to match only on "429", which
 // never fires for the capacity failure providers actually send back
 // ("ModelRateLimitError … E003"), so the retry was effectively dead code.
 function runOne(
+  replicate: ReturnType<typeof getReplicate>,
   prompt: string,
   dataUrl: string,
   aspectRatio: string,
@@ -54,7 +52,20 @@ function fallbackModelId(primaryId: string): string {
     : "openai/gpt-image-2";
 }
 
+// A 4-output run plus a provider fallback round can outlast the platform default,
+// and a timeout here throws away work Replicate has already billed for.
+export const maxDuration = 300;
+
 export async function POST(req: NextRequest) {
+  // Fails here, before the upload is read or any model runs, when the
+  // deployment has no usable Replicate token.
+  let replicate: ReturnType<typeof getReplicate>;
+  try {
+    replicate = getReplicate();
+  } catch (err) {
+    return errorResponse(err, "Image generation");
+  }
+
   const formData = await req.formData();
   const file = formData.get("photo");
   const prompt = formData.get("prompt");
@@ -160,7 +171,7 @@ export async function POST(req: NextRequest) {
     try {
       outputs = await Promise.all(
         Array.from({ length: numOutputs }, () =>
-          runOne(promptText, imageUrl, aspectRatio, modelId, resolution)
+          runOne(replicate, promptText, imageUrl, aspectRatio, modelId, resolution)
         )
       );
     } catch (err) {
@@ -169,7 +180,7 @@ export async function POST(req: NextRequest) {
       console.warn(`${modelId} at capacity — falling back to ${fb}`);
       outputs = await Promise.all(
         Array.from({ length: numOutputs }, () =>
-          runOne(promptText, imageUrl, aspectRatio, fb, resolution)
+          runOne(replicate, promptText, imageUrl, aspectRatio, fb, resolution)
         )
       );
     }
@@ -178,8 +189,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ images, uploadUrl });
   } catch (err) {
     console.error("Replicate error:", err);
-    const message = describeModelError(err, getModelConfig(modelId).name);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return errorResponse(err, getModelConfig(modelId).name);
   } finally {
     await Promise.all([
       uploadedFile && replicate.files.delete(uploadedFile.id).catch(() => {}),

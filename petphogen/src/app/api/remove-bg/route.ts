@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import Replicate from "replicate";
+import { getReplicate } from "@/lib/replicate";
+import { errorResponse } from "@/lib/routeError";
 import { applyMaskAsAlpha } from "@/lib/cutout";
 import { putBuffer } from "@/lib/storage";
-import { runModel, describeModelError } from "@/lib/replicateRun";
-
-const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN,
-});
+import { runModel } from "@/lib/replicateRun";
 
 // Grounding DINO + SAM, prompt-targeted segmentation. Saliency-based removers
 // (RMBG/BiRefNet) treat a bold graphic backdrop — like the orange disc behind
@@ -20,7 +17,18 @@ const MASK_PROMPT = "dog, cat, pet, animal";
 // The model returns [annotated, neg_annotated, mask, inverted_mask].
 const MASK_INDEX = 2;
 
+// Segmentation plus alpha compositing can outlast the platform default,
+// and a timeout here throws away work Replicate has already billed for.
+export const maxDuration = 300;
+
 export async function POST(req: NextRequest) {
+  let replicate: ReturnType<typeof getReplicate>;
+  try {
+    replicate = getReplicate();
+  } catch (err) {
+    return errorResponse(err, "Background removal");
+  }
+
   const { imageUrl } = await req.json();
 
   if (!imageUrl || typeof imageUrl !== "string") {
@@ -56,9 +64,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ url });
   } catch (err) {
     console.error("Background removal error:", err);
-    return NextResponse.json(
-      { error: describeModelError(err, "Background removal") },
-      { status: 500 }
-    );
+    return errorResponse(err, "Background removal");
   }
 }

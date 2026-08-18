@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import Replicate from "replicate";
+import { getReplicate } from "@/lib/replicate";
+import { errorResponse } from "@/lib/routeError";
 import sharp from "@/lib/sharpConfig";
 import { clamp } from "@/lib/geometry";
 import { rehostAll } from "@/lib/storage";
-import { runModel, describeModelError, isTransientModelError } from "@/lib/replicateRun";
+import { runModel, isTransientModelError } from "@/lib/replicateRun";
 import {
   getComposeModelConfig,
   buildComposeImageInput,
@@ -14,11 +15,18 @@ import {
   type ModelConfig,
 } from "@/lib/models";
 
-const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN,
-});
+// A sharp composite plus a model pass can outlast the platform default,
+// and a timeout here throws away work Replicate has already billed for.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
+  let replicate: ReturnType<typeof getReplicate>;
+  try {
+    replicate = getReplicate();
+  } catch (err) {
+    return errorResponse(err, "Scene compositing");
+  }
+
   const formData = await req.formData();
   const sourceImageUrl = formData.get("sourceImageUrl") as string;
   const backgroundPhoto = formData.get("backgroundPhoto");
@@ -106,7 +114,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ images });
   } catch (err) {
     console.error("Compose error:", err);
-    return NextResponse.json({ error: describeModelError(err, config.name) }, { status: 500 });
+    return errorResponse(err, config.name);
   } finally {
     if (uploadedComposite) {
       await replicate.files.delete(uploadedComposite.id).catch(() => {});

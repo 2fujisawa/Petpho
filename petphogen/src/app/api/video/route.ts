@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import Replicate from "replicate";
+import { getReplicate } from "@/lib/replicate";
+import { errorResponse } from "@/lib/routeError";
 import { rehostVideo } from "@/lib/storage";
 import { describeModelError } from "@/lib/replicateRun";
 import {
@@ -15,8 +16,6 @@ import {
 // fetching a finished clip and copying it into Blob.
 export const maxDuration = 300;
 
-const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
-
 // Start a prediction and hand the id straight back.
 //
 // Holding the request open for the whole render is not viable: a real clip took
@@ -25,6 +24,13 @@ const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 // which would kill a video the user already paid for. Polling via GET below
 // makes the wait independent of any function timeout.
 export async function POST(req: NextRequest) {
+  let replicate: ReturnType<typeof getReplicate>;
+  try {
+    replicate = getReplicate();
+  } catch (err) {
+    return errorResponse(err, "Video generation");
+  }
+
   const body = await req.json();
   const { imageUrl, prompt, model, resolution, aspectRatio, generateAudio } = body;
 
@@ -69,7 +75,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ id: prediction.id, status: prediction.status });
   } catch (err) {
     console.error("Video start error:", err);
-    return NextResponse.json({ error: describeModelError(err, config.name) }, { status: 500 });
+    return errorResponse(err, config.name);
   }
 }
 
@@ -77,6 +83,13 @@ export async function POST(req: NextRequest) {
 // URL is handed back, because Replicate's own output URLs expire — storing one
 // in history is what produces a permanently broken "Expired" card later.
 export async function GET(req: NextRequest) {
+  let replicate: ReturnType<typeof getReplicate>;
+  try {
+    replicate = getReplicate();
+  } catch (err) {
+    return errorResponse(err, "Video generation");
+  }
+
   const id = req.nextUrl.searchParams.get("id");
   if (!id) {
     return NextResponse.json({ error: "No prediction id" }, { status: 400 });

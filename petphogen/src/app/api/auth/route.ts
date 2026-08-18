@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, sessionToken, safeEqual } from "@/lib/session";
+import { ConfigError, requireEnv } from "@/lib/env";
 
 // Best-effort throttle. Serverless instances are short-lived so this isn't a
 // hard guarantee, but it turns an unlimited online guessing loop into a slow
@@ -38,8 +39,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const expected = process.env.ADMIN_PASSWORD;
-  if (!expected || typeof password !== "string" || !safeEqual(password, expected)) {
+  // A deployment with no password set can never accept a sign-in, so saying
+  // "Incorrect password" sends the reader hunting for a typo in something that
+  // could never have worked. Say what's actually wrong instead.
+  let expected: string;
+  try {
+    expected = requireEnv("ADMIN_PASSWORD");
+  } catch (err) {
+    const message = err instanceof ConfigError ? err.message : "Sign-in is not configured";
+    console.error("auth:", message);
+    return NextResponse.json({ error: message }, { status: 503 });
+  }
+
+  if (typeof password !== "string" || !safeEqual(password, expected)) {
     return NextResponse.json({ error: "Incorrect password" }, { status: 401 });
   }
 
